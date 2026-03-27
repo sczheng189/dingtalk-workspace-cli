@@ -63,7 +63,7 @@ dws contact user search --keyword "Alice" -f json
 | Service | Command | Description |
 |---------|---------|-------------|
 | Contact | `contact` | Contacts / users / departments |
-| Chat | `chat` | Bot messaging / webhook / bot management |
+| Chat | `chat` | Group management / members / bot messaging / webhook |
 | Calendar | `calendar` | Calendar events / meeting rooms / free-busy |
 | Todo | `todo` | Todo task management |
 | Approval | `approval` | Approval processes / forms / instances |

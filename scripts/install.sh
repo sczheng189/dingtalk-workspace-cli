@@ -134,7 +134,7 @@ print_banner() {
   printf '\n'
   say "┌──────────────────────────────────────┐"
   say "│     DWS Installer                    │"
-  say "│     DingTalk Workspace CLI            │"
+  say "│     DingTalk Workspace CLI           │"
   say "└──────────────────────────────────────┘"
   printf '\n'
 }

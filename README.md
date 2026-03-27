@@ -63,7 +63,7 @@ dws contact user search --keyword "悟空" -f json
 | 服务 | 命令 | 描述 |
 |---------|---------|-------------|
 | 通讯录 | `contact` | 通讯录 / 用户 / 部门 |
-| 群聊 | `chat` | 机器人消息 / Webhook / 机器人管理 |
+| 群聊 | `chat` | 群管理 / 群成员 / 机器人消息 / Webhook |
 | 智能表格 | `aitable` | AI 表格操作 |
 | 日历 | `calendar` | 日历日程 / 会议室 / 闲忙 |
 | 待办 | `todo` | 待办任务管理 |
