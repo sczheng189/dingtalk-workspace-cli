@@ -88,7 +88,7 @@ func (r *runtimeRunner) Run(ctx context.Context, invocation executor.Invocation)
 	}
 
 	if shouldUseDirectRuntime(invocation) {
-		if endpoint, ok := directRuntimeEndpoint(invocation.CanonicalProduct); ok {
+		if endpoint, ok := directRuntimeEndpoint(invocation.CanonicalProduct, invocation.Tool); ok {
 			return r.executeInvocation(ctx, endpoint, invocation)
 		}
 	}

@@ -50,6 +50,22 @@ func (l StaticLoader) Load(_ context.Context) (ir.Catalog, error) {
 	return l.Catalog, nil
 }
 
+// CatalogLoaderFrom creates a CatalogLoader that returns a
+// pre-loaded catalog and error. This allows multiple consumers
+// (schema command, MCP command tree) to share one discovery result.
+func CatalogLoaderFrom(catalog ir.Catalog, err error) CatalogLoader {
+	return &preloadedLoader{catalog: catalog, err: err}
+}
+
+type preloadedLoader struct {
+	catalog ir.Catalog
+	err     error
+}
+
+func (l *preloadedLoader) Load(_ context.Context) (ir.Catalog, error) {
+	return l.catalog, l.err
+}
+
 type FixtureLoader struct {
 	Path string
 }

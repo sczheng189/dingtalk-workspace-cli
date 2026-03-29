@@ -122,6 +122,61 @@ func normalizeFormat(raw string, fallback Format) Format {
 	}
 }
 
+// WriteFiltered applies field selection and/or jq filtering before
+// writing the payload. If jq is non-empty, the jq result is written
+// directly (bypassing format). If fields is non-empty, the payload
+// is filtered to those fields before normal output.
+func WriteFiltered(w io.Writer, format Format, payload any, fields, jq string) error {
+	payload = unwrapCompatRuntimePayload(payload)
+
+	if strings.TrimSpace(jq) != "" {
+		return ApplyJQ(w, payload, strings.TrimSpace(jq))
+	}
+
+	if strings.TrimSpace(fields) != "" {
+		fieldList := strings.Split(fields, ",")
+		payload = SelectFields(payload, fieldList)
+	}
+
+	return Write(w, format, payload)
+}
+
+// ResolveFields extracts the --fields flag value from the command.
+func ResolveFields(cmd *cobra.Command) string {
+	if cmd == nil {
+		return ""
+	}
+	for _, flags := range []*pflag.FlagSet{cmd.Flags(), cmd.InheritedFlags()} {
+		if flags == nil {
+			continue
+		}
+		if f := flags.Lookup("fields"); f != nil && f.Changed {
+			if v, err := flags.GetString("fields"); err == nil {
+				return v
+			}
+		}
+	}
+	return ""
+}
+
+// ResolveJQ extracts the --jq flag value from the command.
+func ResolveJQ(cmd *cobra.Command) string {
+	if cmd == nil {
+		return ""
+	}
+	for _, flags := range []*pflag.FlagSet{cmd.Flags(), cmd.InheritedFlags()} {
+		if flags == nil {
+			continue
+		}
+		if f := flags.Lookup("jq"); f != nil && f.Changed {
+			if v, err := flags.GetString("jq"); err == nil {
+				return v
+			}
+		}
+	}
+	return ""
+}
+
 // WriteJSON marshals payload as indented JSON and writes it to w.
 func WriteJSON(w io.Writer, payload any) error {
 	data, err := json.MarshalIndent(payload, "", "  ")
