@@ -14,8 +14,10 @@
 package compat
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -143,8 +145,20 @@ func NewDirectCommand(route Route, runner executor.Runner) *cobra.Command {
 				}
 			}
 			if blocked, _ := params["_blocked"].(bool); blocked {
-				fmt.Fprintln(cmd.ErrOrStderr(), "⚠️  This is a destructive operation. Use --yes to confirm, or run with --dry-run to preview.")
-				return nil
+				// Interactive confirmation for destructive operations (consistent with Helper commands)
+				fmt.Fprintln(cmd.ErrOrStderr(), "⚠️  This is a destructive operation.")
+				fmt.Fprint(cmd.ErrOrStderr(), "Confirm? (yes/no): ")
+
+				reader := bufio.NewReader(os.Stdin)
+				answer, _ := reader.ReadString('\n')
+				answer = strings.TrimSpace(strings.ToLower(answer))
+
+				if answer != "yes" && answer != "y" {
+					fmt.Fprintln(cmd.ErrOrStderr(), "Operation cancelled")
+					return nil
+				}
+				// User confirmed, continue execution
+				delete(params, "_blocked")
 			}
 
 			invocation := executor.NewCompatibilityInvocation(
