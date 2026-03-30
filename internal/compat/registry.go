@@ -143,6 +143,7 @@ func NewDirectCommand(route Route, runner executor.Runner) *cobra.Command {
 				}
 			}
 			if blocked, _ := params["_blocked"].(bool); blocked {
+				fmt.Fprintln(cmd.ErrOrStderr(), "⚠️  This is a destructive operation. Use --yes to confirm, or run with --dry-run to preview.")
 				return nil
 			}
 
