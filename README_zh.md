@@ -9,7 +9,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Go-1.25+-green?logo=go&logoColor=white" alt="Go 1.25+">
   <a href="https://github.com/DingTalk-Real-AI/dingtalk-workspace-cli/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue" alt="License Apache-2.0"></a>
-  <a href="https://github.com/DingTalk-Real-AI/dingtalk-workspace-cli/releases"><img src="https://img.shields.io/badge/release-v1.0.4-red" alt="v1.0.4"></a>
+  <a href="https://github.com/DingTalk-Real-AI/dingtalk-workspace-cli/releases"><img src="https://img.shields.io/badge/release-v1.0.5-red" alt="v1.0.5"></a>
   <a href="https://github.com/DingTalk-Real-AI/dingtalk-workspace-cli/actions/workflows/ci.yml"><img src="https://github.com/DingTalk-Real-AI/dingtalk-workspace-cli/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src=".github/badges/coverage.svg" alt="Coverage">
 </p>
@@ -66,6 +66,11 @@ irm https://raw.githubusercontent.com/DingTalk-Real-AI/dingtalk-workspace-cli/ma
 
 **预编译二进制文件**：从 [GitHub Releases](https://github.com/DingTalk-Real-AI/dingtalk-workspace-cli/releases) 下载。
 
+> **macOS 用户注意**：如果提示“无法打开，因为 Apple 无法检查其是否包含恶意软件”，请执行：
+> ```bash
+> xattr -d com.apple.quarantine /path/to/dws
+> ```
+
 **从源码构建**：
 
 ```bash
@@ -97,8 +102,7 @@ cp dws ~/.local/bin/         # 安装到 PATH
 进入应用 → **安全设置**，在「重定向 URL」中添加以下地址并保存：
 
 ```
-http://127.0.0.1
-https://login.dingtalk.com
+http://127.0.0.1,https://login.dingtalk.com
 ```
 
 > `http://127.0.0.1` 用于本地浏览器登录；`https://login.dingtalk.com` 用于 `--device` 设备流登录（Docker 容器、远程服务器等无浏览器环境）。建议两个都配置。

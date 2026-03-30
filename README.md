@@ -9,7 +9,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Go-1.25+-green?logo=go&logoColor=white" alt="Go 1.25+">
   <a href="https://github.com/DingTalk-Real-AI/dingtalk-workspace-cli/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue" alt="License Apache-2.0"></a>
-  <a href="https://github.com/DingTalk-Real-AI/dingtalk-workspace-cli/releases"><img src="https://img.shields.io/badge/release-v1.0.4-red" alt="v1.0.4"></a>
+  <a href="https://github.com/DingTalk-Real-AI/dingtalk-workspace-cli/releases"><img src="https://img.shields.io/badge/release-v1.0.5-red" alt="v1.0.5"></a>
   <a href="https://github.com/DingTalk-Real-AI/dingtalk-workspace-cli/actions/workflows/ci.yml"><img src="https://github.com/DingTalk-Real-AI/dingtalk-workspace-cli/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src=".github/badges/coverage.svg" alt="Coverage">
 </p>
@@ -66,6 +66,11 @@ irm https://raw.githubusercontent.com/DingTalk-Real-AI/dingtalk-workspace-cli/ma
 
 **Pre-built binary**: download from [GitHub Releases](https://github.com/DingTalk-Real-AI/dingtalk-workspace-cli/releases).
 
+> **macOS users**: If you see "cannot be opened because Apple cannot check it for malicious software", run:
+> ```bash
+> xattr -d com.apple.quarantine /path/to/dws
+> ```
+
 **Build from source**:
 
 ```bash
@@ -97,8 +102,7 @@ Go to the [Open Platform Console](https://open-dev.dingtalk.com/fe/app?hash=%23%
 Go to app settings → **Security Settings**. Add the following redirect URLs and save:
 
 ```
-http://127.0.0.1
-https://login.dingtalk.com
+http://127.0.0.1,https://login.dingtalk.com
 ```
 
 > `http://127.0.0.1` is for local browser login; `https://login.dingtalk.com` is for `--device` device-flow login (Docker containers, remote servers, and other headless environments). We recommend configuring both.

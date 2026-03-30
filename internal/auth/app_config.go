@@ -45,6 +45,14 @@ var (
 	cachedAppConfigMu   sync.RWMutex
 )
 
+// Cached resolved credentials (avoid repeated keychain access).
+var (
+	cachedResolvedID     string
+	cachedResolvedSecret string
+	cachedResolvedValid  bool
+	cachedResolvedMu     sync.RWMutex
+)
+
 // GetAppConfigPath returns the path to the app config file.
 func GetAppConfigPath(configDir string) string {
 	return filepath.Join(configDir, appConfigFile)
@@ -103,6 +111,13 @@ func SaveAppConfig(configDir string, config *AppConfig) error {
 	cachedAppConfig = config
 	cachedAppConfigMu.Unlock()
 
+	// Invalidate resolved credentials cache so next access re-resolves
+	cachedResolvedMu.Lock()
+	cachedResolvedValid = false
+	cachedResolvedID = ""
+	cachedResolvedSecret = ""
+	cachedResolvedMu.Unlock()
+
 	return nil
 }
 
@@ -124,6 +139,13 @@ func DeleteAppConfig(configDir string) error {
 	cachedAppConfigMu.Lock()
 	cachedAppConfig = nil
 	cachedAppConfigMu.Unlock()
+
+	// Clear resolved credentials cache
+	cachedResolvedMu.Lock()
+	cachedResolvedValid = false
+	cachedResolvedID = ""
+	cachedResolvedSecret = ""
+	cachedResolvedMu.Unlock()
 
 	return nil
 }
@@ -169,17 +191,33 @@ func HasAppConfig(configDir string) bool {
 }
 
 // ResolveAppCredentials resolves the client ID and secret from the app config.
+// Results are cached to avoid repeated keychain access.
 // Returns empty strings if the config doesn't exist or resolution fails.
 func ResolveAppCredentials(configDir string) (clientID, clientSecret string) {
-	cfg := GetCachedAppConfig(configDir)
-	if cfg == nil {
-		return "", ""
+	// Fast path: check cache first
+	cachedResolvedMu.RLock()
+	if cachedResolvedValid {
+		id, secret := cachedResolvedID, cachedResolvedSecret
+		cachedResolvedMu.RUnlock()
+		return id, secret
+	}
+	cachedResolvedMu.RUnlock()
+
+	// Slow path: load and cache
+	cachedResolvedMu.Lock()
+	defer cachedResolvedMu.Unlock()
+	// Double-check after acquiring write lock
+	if cachedResolvedValid {
+		return cachedResolvedID, cachedResolvedSecret
 	}
 
-	clientID = cfg.ClientID
-	secret, err := ResolveSecret(cfg.ClientSecret)
-	if err == nil {
-		clientSecret = secret
+	cfg := GetCachedAppConfig(configDir)
+	if cfg != nil {
+		cachedResolvedID = cfg.ClientID
+		if secret, err := ResolveSecret(cfg.ClientSecret); err == nil {
+			cachedResolvedSecret = secret
+		}
 	}
-	return clientID, clientSecret
+	cachedResolvedValid = true
+	return cachedResolvedID, cachedResolvedSecret
 }

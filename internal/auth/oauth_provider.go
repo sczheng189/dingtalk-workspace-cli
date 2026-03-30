@@ -118,13 +118,21 @@ func (p *OAuthProvider) Login(ctx context.Context, force bool) (*TokenData, erro
 			_, _ = fmt.Fprint(w, i18n.T("授权失败：未收到授权码"))
 			return
 		}
+		// Write response FIRST before notifying main goroutine
+		// This prevents race condition where server.Shutdown is called
+		// before response is fully sent
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = fmt.Fprint(w, successHTML)
+		// Ensure response is flushed to client
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		// Now notify main goroutine (non-blocking)
 		select {
 		case codeCh <- code:
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			_, _ = fmt.Fprint(w, successHTML)
+			// Success
 		default:
-			// Select already exited (timeout/cancel); discard late callback.
-			w.WriteHeader(http.StatusGone)
+			// Select already exited (timeout/cancel); code discarded but response already sent
 		}
 	})
 
