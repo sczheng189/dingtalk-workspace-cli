@@ -269,6 +269,7 @@ func NewRootCommandWithEngine(rootCtx context.Context, engine *pipeline.Engine) 
 		newCacheCommand(),
 		newCompletionCommand(root),
 		newRecoveryCommand(rootCtx, loader, flags),
+		newUpgradeCommand(),
 		newVersionCommand(),
 		schemaCmd,
 		genSkillsCmd,

@@ -216,10 +216,10 @@ func TestRootHelpCustomizationDoesNotAffectSubcommandHelp(t *testing.T) {
 	}
 }
 
-func TestRootCommandDoesNotRegisterUpgradeCommand(t *testing.T) {
+func TestRootCommandRegistersUpgradeCommand(t *testing.T) {
 	root := NewRootCommand()
-	if cmd := lookupCommand(root, "upgrade"); cmd != nil {
-		t.Fatalf("findCommand(upgrade) = %q, want nil", cmd.CommandPath())
+	if cmd := lookupCommand(root, "upgrade"); cmd == nil {
+		t.Fatal("upgrade command should be registered on root, but was not found")
 	}
 }
 
