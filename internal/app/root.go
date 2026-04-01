@@ -136,14 +136,14 @@ func printExecutionError(root *cobra.Command, stdout, stderr io.Writer, err erro
 }
 
 // resolveVerbosity derives the error verbosity level from the root command's flags.
-func resolveVerbosity(root *cobra.Command) apperrors.Verbosity {
-	if root == nil {
+func resolveVerbosity(cmd *cobra.Command) apperrors.Verbosity {
+	if cmd == nil {
 		return apperrors.VerbosityNormal
 	}
-	if debug, err := root.PersistentFlags().GetBool("debug"); err == nil && debug {
+	if debug, err := cmd.Flags().GetBool("debug"); err == nil && debug {
 		return apperrors.VerbosityDebug
 	}
-	if verbose, err := root.PersistentFlags().GetBool("verbose"); err == nil && verbose {
+	if verbose, err := cmd.Flags().GetBool("verbose"); err == nil && verbose {
 		return apperrors.VerbosityVerbose
 	}
 	return apperrors.VerbosityNormal
