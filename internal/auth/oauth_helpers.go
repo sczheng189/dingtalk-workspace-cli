@@ -339,9 +339,9 @@ select:focus{outline:none;border-color:#1890ff;box-shadow:0 0 0 2px rgba(24,144,
 .link:hover{text-decoration:underline}
 .success-msg{display:none;width:100%;min-height:36px;gap:12px;padding:8px 12px;margin-top:20px;
   background:linear-gradient(0deg,rgba(0,102,255,0.12) 0%,rgba(0,102,255,0.12) 100%),linear-gradient(0deg,#FFFFFF 0%,#FFFFFF 100%);
-  border-radius:12px;align-items:flex-start;justify-content:flex-start}
-.success-msg-icon{width:16px;height:16px;flex-shrink:0;margin-top:3px}
-.success-msg-text{flex:1;color:#181C1F;font-size:14px;line-height:22px}
+  border-radius:12px;align-items:center;justify-content:flex-start}
+.success-msg-icon{width:16px;height:16px;flex-shrink:0}
+.success-msg-text{flex:1;color:#181C1F;font-size:14px;line-height:22px;text-align:left}
 .error-msg{color:#ff4d4f;font-size:14px;margin-top:8px;display:none}
 .loading{display:inline-block;width:16px;height:16px;border:2px solid #fff;border-top-color:transparent;
   border-radius:50%;animation:spin 0.8s linear infinite;margin-right:8px;vertical-align:middle}
@@ -352,7 +352,7 @@ select:focus{outline:none;border-color:#1890ff;box-shadow:0 0 0 2px rgba(24,144,
 <h1>该组织尚未开启 CLI 数据访问权限</h1>
 <p>你所选择的组织管理员尚未开启「允许成员通过 CLI 访问其个人数据」的权限。</p>
 <div class="form-group">
-  <label class="form-label">你将使用以下账号授权登录</label>
+  <label class="form-label">选择一位主管理员发送开通申请</label>
   <div class="select-wrapper">
     <select id="adminSelect"><option value="">加载中...</option></select>
     <div class="select-arrow"></div>
