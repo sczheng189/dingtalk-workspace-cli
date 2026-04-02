@@ -88,6 +88,8 @@ cp dws ~/.local/bin/         # 安装到 PATH
 
 ## 升级
 
+> 需要 **v1.0.7** 及以上版本。更早版本请重新执行[安装脚本](#安装)进行升级。
+
 dws 内置自升级能力，直接从 [GitHub Releases](https://github.com/DingTalk-Real-AI/dingtalk-workspace-cli/releases) 拉取更新，支持 SHA256 完整性校验和自动备份。
 
 ```bash
