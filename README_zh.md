@@ -66,6 +66,12 @@ irm https://raw.githubusercontent.com/DingTalk-Real-AI/dingtalk-workspace-cli/ma
 <details>
 <summary>其他安装方式</summary>
 
+**npm**（需要 Node.js（npm/npx））：
+
+```bash
+npm install -g dingtalk-workspace-cli
+```
+
 **预编译二进制文件**：从 [GitHub Releases](https://github.com/DingTalk-Real-AI/dingtalk-workspace-cli/releases) 下载。
 
 > **macOS 用户注意**：如果提示“无法打开，因为 Apple 无法检查其是否包含恶意软件”，请执行：
