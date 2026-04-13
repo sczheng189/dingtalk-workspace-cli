@@ -173,6 +173,11 @@ func (r *runtimeRunner) Run(ctx context.Context, invocation executor.Invocation)
 }
 
 func (r *runtimeRunner) executeInvocation(ctx context.Context, endpoint string, invocation executor.Invocation) (result executor.Result, retErr error) {
+	// Route stdio:// endpoints to the local StdioClient — no HTTP, no auth.
+	if IsStdioEndpoint(endpoint) {
+		return r.executeStdioInvocation(ctx, invocation)
+	}
+
 	invokeStart := time.Now()
 	execID := generateExecutionID()
 	r.transport.ExecutionId = execID
@@ -320,6 +325,63 @@ func (r *runtimeRunner) executeInvocation(ctx context.Context, endpoint string, 
 		response["safety"] = scanReport
 	}
 	return executor.Result{Invocation: invocation, Response: response}, nil
+}
+
+// executeStdioInvocation dispatches a tool call through a local StdioClient
+// subprocess instead of the HTTP transport. This is used for plugin stdio
+// servers whose endpoints use the stdio:// scheme.
+func (r *runtimeRunner) executeStdioInvocation(ctx context.Context, invocation executor.Invocation) (executor.Result, error) {
+	if invocation.DryRun {
+		return executor.Result{
+			Invocation: invocation,
+			Response: map[string]any{
+				"dry_run":   true,
+				"transport": "stdio",
+				"request":   executor.ToolCallRequest(invocation.Tool, invocation.Params),
+				"note":      "execution skipped by --dry-run",
+			},
+		}, nil
+	}
+
+	client, ok := LookupStdioClient(invocation.CanonicalProduct)
+	if !ok {
+		return executor.Result{}, apperrors.NewInternal(
+			fmt.Sprintf("stdio client not found for %q", invocation.CanonicalProduct))
+	}
+
+	callCtx := ctx
+	if r.globalFlags != nil && r.globalFlags.Timeout > 0 {
+		var cancel context.CancelFunc
+		callCtx, cancel = context.WithTimeout(ctx, time.Duration(r.globalFlags.Timeout)*time.Second)
+		defer cancel()
+	}
+
+	callResult, err := client.CallTool(callCtx, invocation.Tool, invocation.Params)
+	if err != nil {
+		return executor.Result{}, apperrors.NewAPI(
+			fmt.Sprintf("stdio call failed: %v", err),
+			apperrors.WithOperation("tools/call"),
+			apperrors.WithReason("stdio_error"),
+		)
+	}
+
+	if callResult.IsError {
+		return executor.Result{}, apperrors.NewAPI(
+			extractMCPErrorMessage(callResult),
+			apperrors.WithOperation("tools/call"),
+			apperrors.WithReason("mcp_tool_error"),
+			apperrors.WithServerKey(invocation.CanonicalProduct),
+		)
+	}
+
+	invocation.Implemented = true
+	return executor.Result{
+		Invocation: invocation,
+		Response: map[string]any{
+			"transport": "stdio",
+			"content":   callResult.Content,
+		},
+	}, nil
 }
 
 func (r *runtimeRunner) resolveAuthToken(ctx context.Context) string {

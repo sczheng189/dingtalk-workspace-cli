@@ -15,6 +15,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	stderrors "errors"
 	"fmt"
 	"io"
@@ -30,6 +31,7 @@ import (
 	authpkg "github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/auth"
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/cache"
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/cli"
+	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/compat"
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/discovery"
 	apperrors "github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/errors"
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/executor"
@@ -291,11 +293,16 @@ func NewRootCommandWithEngine(rootCtx context.Context, engine *pipeline.Engine) 
 	}
 	root.AddCommand(utilityCommands...)
 
-	// --- Plugin loading: inject plugin MCP servers before legacy commands ---
-	loadPlugins(engine)
-
 	root.AddCommand(newLegacyPublicCommands(rootCtx, runner)...)
 	root.AddCommand(newLegacyHiddenCommands(runner)...)
+
+	// --- Plugin loading: runs AFTER legacy commands so that
+	// AppendDynamicServer adds plugin endpoints on top of Market
+	// endpoints (SetDynamicServers is called inside loadDynamicCommands).
+	pluginCmds := loadPlugins(engine, runner)
+	if len(pluginCmds) > 0 {
+		root.AddCommand(pluginCmds...)
+	}
 
 	if fn := edition.Get().RegisterExtraCommands; fn != nil {
 		caller := newToolCallerAdapter(runner, flags)
@@ -949,7 +956,7 @@ func CloseFileLogger() {
 // the dynamic server registry, and registers their pipeline hooks.
 // This runs before legacy command construction so that plugin servers
 // are available for EnvironmentLoader.Load().
-func loadPlugins(engine *pipeline.Engine) {
+func loadPlugins(engine *pipeline.Engine, runner executor.Runner) []*cobra.Command {
 	pluginLoader := plugin.NewLoader(RawVersion())
 
 	// 0. Check for managed plugin updates (non-blocking, best-effort).
@@ -972,25 +979,26 @@ func loadPlugins(engine *pipeline.Engine) {
 
 	allPlugins := append(managedPlugins, userPlugins...)
 
-	// 3. Inject MCP servers into dynamic server registry
+	// 3. Inject streamable-http servers into dynamic server registry
 	for _, p := range allPlugins {
 		for _, srv := range p.ToServerDescriptors() {
 			AppendDynamicServer(srv)
 		}
 	}
 
-	// 4. Start stdio MCP servers and register them
+	// 4. Start stdio MCP servers, discover tools, and build CLI commands
+	var pluginCmds []*cobra.Command
 	for _, p := range allPlugins {
 		for _, sc := range p.StdioClients() {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			if err := sc.Client.Start(ctx); err != nil {
+			// Use background context so the subprocess lives for the CLI
+			// process lifetime (not killed by a short timeout).
+			if err := sc.Client.Start(context.Background()); err != nil {
 				slog.Warn("plugin: failed to start stdio server",
 					"plugin", p.Manifest.Name, "server", sc.Key, "error", err)
-				cancel()
 				continue
 			}
-			cancel()
-			registerStdioServer(p, sc)
+			cmds := registerStdioServer(p, sc, runner)
+			pluginCmds = append(pluginCmds, cmds...)
 		}
 	}
 
@@ -1018,22 +1026,117 @@ func loadPlugins(engine *pipeline.Engine) {
 			"user", len(userPlugins),
 		)
 	}
+
+	return pluginCmds
 }
 
-// registerStdioServer registers a stdio MCP server's tools into the
-// dynamic server registry after performing initialize + tools/list.
-func registerStdioServer(p *plugin.Plugin, sc plugin.StdioServerClient) {
+// registerStdioServer initializes a stdio MCP server, discovers its tools
+// via ListTools, builds CLI commands, and registers the StdioClient for
+// runtime dispatch. Returns generated cobra commands.
+func registerStdioServer(p *plugin.Plugin, sc plugin.StdioServerClient, runner executor.Runner) []*cobra.Command {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	if _, err := sc.Client.Initialize(ctx); err != nil {
 		slog.Warn("plugin: stdio initialize failed",
 			"plugin", p.Manifest.Name, "server", sc.Key, "error", err)
-		return
+		return nil
 	}
 
-	slog.Debug("plugin: stdio server initialized",
-		"plugin", p.Manifest.Name, "server", sc.Key)
+	toolsResult, err := sc.Client.ListTools(ctx)
+	if err != nil {
+		slog.Warn("plugin: stdio ListTools failed",
+			"plugin", p.Manifest.Name, "server", sc.Key, "error", err)
+		return nil
+	}
+
+	if len(toolsResult.Tools) == 0 {
+		slog.Debug("plugin: stdio server has no tools",
+			"plugin", p.Manifest.Name, "server", sc.Key)
+		return nil
+	}
+
+	// Build CLIOverlay: use manifest CLI metadata if present, else auto-generate.
+	serverID := sc.Key
+	overlay := market.CLIOverlay{
+		ID:      serverID,
+		Command: serverID,
+	}
+	if srv, ok := p.Manifest.MCPServers[sc.Key]; ok && len(srv.CLI) > 0 {
+		if err := json.Unmarshal(srv.CLI, &overlay); err != nil {
+			slog.Warn("plugin: failed to parse CLI overlay for stdio server",
+				"plugin", p.Manifest.Name, "server", sc.Key, "error", err)
+		}
+		if overlay.ID == "" {
+			overlay.ID = serverID
+		}
+		if overlay.Command == "" {
+			overlay.Command = serverID
+		}
+	}
+
+	// Auto-generate ToolOverrides from discovered tools when not provided.
+	if len(overlay.ToolOverrides) == 0 {
+		overlay.ToolOverrides = make(map[string]market.CLIToolOverride)
+		if len(overlay.Prefixes) == 0 {
+			overlay.Prefixes = []string{serverID}
+		}
+		for _, tool := range toolsResult.Tools {
+			overlay.ToolOverrides[tool.Name] = market.CLIToolOverride{
+				IsSensitive: tool.Sensitive,
+			}
+		}
+	}
+
+	// Construct virtual endpoint and server descriptor.
+	endpoint := StdioEndpoint(p.Manifest.Name, sc.Key)
+
+	source := "plugin"
+	if p.IsManaged {
+		source = "plugin-managed"
+	}
+
+	descriptor := market.ServerDescriptor{
+		Key:         sc.Key,
+		DisplayName: p.Manifest.Name + "/" + sc.Key,
+		Description: p.Manifest.Description,
+		Endpoint:    endpoint,
+		Source:      source,
+		CLI:         overlay,
+		HasCLIMeta:  true,
+	}
+
+	AppendDynamicServer(descriptor)
+	RegisterStdioClient(serverID, sc.Client)
+
+	// Convert tool descriptors to DetailTool entries for flag generation.
+	detailsByID := make(map[string][]market.DetailTool)
+	var detailTools []market.DetailTool
+	for _, tool := range toolsResult.Tools {
+		schemaJSON := ""
+		if tool.InputSchema != nil {
+			if data, marshalErr := json.Marshal(tool.InputSchema); marshalErr == nil {
+				schemaJSON = string(data)
+			}
+		}
+		detailTools = append(detailTools, market.DetailTool{
+			ToolName:    tool.Name,
+			ToolTitle:   tool.Title,
+			ToolDesc:    tool.Description,
+			IsSensitive: tool.Sensitive,
+			ToolRequest: schemaJSON,
+		})
+	}
+	detailsByID[serverID] = detailTools
+
+	cmds := compat.BuildDynamicCommands(
+		[]market.ServerDescriptor{descriptor}, runner, detailsByID)
+
+	slog.Debug("plugin: stdio server registered",
+		"plugin", p.Manifest.Name, "server", sc.Key,
+		"tools", len(toolsResult.Tools), "commands", len(cmds))
+
+	return cmds
 }
 
 // newPipelineEngine creates and configures the pipeline engine with
