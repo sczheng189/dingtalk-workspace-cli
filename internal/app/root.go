@@ -26,6 +26,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -984,25 +985,56 @@ func loadPlugins(engine *pipeline.Engine, runner executor.Runner) []*cobra.Comma
 	allPlugins := append(managedPlugins, userPlugins...)
 	allPlugins = append(allPlugins, devPlugins...)
 
-	// 3. Discover tools from streamable-http servers and build CLI commands
+	// 3. Discover tools from streamable-http servers and build CLI commands.
+	//    Third-party servers with auth headers are discovered in parallel
+	//    to avoid sequential 10s timeouts when multiple remote servers exist.
 	var pluginCmds []*cobra.Command
 	tc := transport.NewClient(nil)
+
+	// Collect all server descriptors and register auth first (fast, no I/O).
+	type pluginServer struct {
+		plugin *plugin.Plugin
+		srv    market.ServerDescriptor
+	}
+	var httpServers []pluginServer
+
 	for _, p := range allPlugins {
 		for _, srv := range p.ToServerDescriptors() {
 			AppendDynamicServer(srv)
 
-			// For plugin-owned streamable-http servers, also discover tools
-			// and build CLI commands (Market servers rely on the detail API).
-			if srv.HasCLIMeta {
-				cmds := registerHTTPServer(p, srv, tc, runner)
-				pluginCmds = append(pluginCmds, cmds...)
-			}
-
-			// Register plugin-level auth credentials for third-party servers
-			// so the runner can inject the correct token at execution time.
 			if len(srv.AuthHeaders) > 0 {
 				registerPluginAuthFromHeaders(srv)
 			}
+
+			if srv.HasCLIMeta {
+				httpServers = append(httpServers, pluginServer{plugin: p, srv: srv})
+			}
+		}
+	}
+
+	// Discover tools from HTTP servers in parallel when there are multiple
+	// servers with auth headers (third-party services with higher latency).
+	if len(httpServers) > 1 {
+		type discoveryResult struct {
+			commands []*cobra.Command
+		}
+		results := make([]discoveryResult, len(httpServers))
+		var wg sync.WaitGroup
+		for i, ps := range httpServers {
+			wg.Add(1)
+			go func(idx int, ps pluginServer) {
+				defer wg.Done()
+				results[idx].commands = registerHTTPServer(ps.plugin, ps.srv, tc, runner)
+			}(i, ps)
+		}
+		wg.Wait()
+		for _, r := range results {
+			pluginCmds = append(pluginCmds, r.commands...)
+		}
+	} else {
+		for _, ps := range httpServers {
+			cmds := registerHTTPServer(ps.plugin, ps.srv, tc, runner)
+			pluginCmds = append(pluginCmds, cmds...)
 		}
 	}
 
