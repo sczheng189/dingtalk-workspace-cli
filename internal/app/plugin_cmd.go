@@ -39,6 +39,7 @@ func newPluginCommand() *cobra.Command {
 		newPluginCreateCommand(),
 		newPluginDevCommand(),
 		newPluginConfigCommand(),
+		newPluginBuildCommand(),
 	)
 
 	return pluginCmd
@@ -276,14 +277,18 @@ func newPluginCreateCommand() *cobra.Command {
   "mcpServers": {
     %q: {
       "type": "stdio",
-      "command": "${DWS_PLUGIN_ROOT}/bin/%s",
+      "command": "${DWS_PLUGIN_ROOT}/bin/server",
       "args": []
     }
+  },
+  "build": {
+    "command": "echo 'TODO: replace with your build command, e.g.: bun build --compile src/server.ts --outfile bin/server'",
+    "output": "bin/server"
   },
   "skills": "./skills/",
   "hooks": "./hooks/hooks.json"
 }
-`, name, desc, pluginType, RawVersion(), name, name)
+`, name, desc, pluginType, RawVersion())
 
 			if err := os.WriteFile(filepath.Join(dir, "plugin.json"), []byte(pluginJSON), 0o644); err != nil {
 				return apperrors.NewInternal(fmt.Sprintf("failed to write plugin.json: %v", err))
@@ -602,6 +607,58 @@ func maskSensitiveValue(value string) string {
 		return strings.Repeat("*", len(value))
 	}
 	return value[:4] + strings.Repeat("*", len(value)-6) + value[len(value)-2:]
+}
+
+func newPluginBuildCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "build <dir>",
+		Short: "Build plugin's stdio server into a native binary",
+		Long: `Runs the build command declared in plugin.json to compile the
+plugin's server into a single executable. This ensures plugin users
+don't need any language runtime (Node.js, Python, etc.) installed.
+
+The build configuration is read from the "build" field in plugin.json:
+
+  {
+    "build": {
+      "command": "bun build --compile src/server.ts --outfile bin/server",
+      "output": "bin/server"
+    }
+  }`,
+		Example: `  dws plugin build ./my-plugin
+  dws plugin build .`,
+		Args:              cobra.ExactArgs(1),
+		DisableAutoGenTag: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dir := args[0]
+			absDir, err := filepath.Abs(dir)
+			if err != nil {
+				return apperrors.NewValidation(fmt.Sprintf("invalid path: %v", err))
+			}
+
+			m, err := plugin.ParseManifest(filepath.Join(absDir, "plugin.json"))
+			if err != nil {
+				return apperrors.NewValidation(fmt.Sprintf("invalid plugin at %s: %v", dir, err))
+			}
+
+			if m.Build == nil {
+				return apperrors.NewValidation(fmt.Sprintf(
+					"plugin %q has no \"build\" field in plugin.json.\n"+
+						"Add a build config, e.g.:\n\n"+
+						"  \"build\": {\n"+
+						"    \"command\": \"bun build --compile src/server.js --outfile bin/server\",\n"+
+						"    \"output\": \"bin/server\"\n"+
+						"  }", m.Name))
+			}
+
+			if err := plugin.BuildPlugin(absDir); err != nil {
+				return apperrors.NewInternal(err.Error())
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "Build succeeded: %s\n", m.Build.Output)
+			return nil
+		},
+	}
 }
 
 func statusStr(enabled bool) string {

@@ -330,6 +330,15 @@ func (l *Loader) InstallFromDir(srcDir string) (*Plugin, error) {
 		return nil, fmt.Errorf("install failed: %w", err)
 	}
 
+	// Run build if configured (compile server to binary).
+	if manifest.Build != nil {
+		if err := runBuild(destDir, manifest.Build); err != nil {
+			// Clean up on build failure.
+			_ = os.RemoveAll(destDir)
+			return nil, fmt.Errorf("plugin build failed: %w", err)
+		}
+	}
+
 	// Enable by default in settings
 	l.setPluginEnabled(manifest.Name, true)
 
@@ -388,6 +397,15 @@ func (l *Loader) InstallFromGit(gitURL string) (*Plugin, error) {
 
 	if err := copyDir(cloneDir, destDir); err != nil {
 		return nil, fmt.Errorf("install failed: %w", err)
+	}
+
+	// Run build if configured (compile server to binary).
+	if manifest.Build != nil {
+		if err := runBuild(destDir, manifest.Build); err != nil {
+			// Clean up on build failure.
+			_ = os.RemoveAll(destDir)
+			return nil, fmt.Errorf("plugin build failed: %w", err)
+		}
 	}
 
 	if !isManaged {
@@ -716,6 +734,57 @@ func SyncSkills(plugins []*Plugin) {
 	}
 
 	slog.Debug("plugin: skill sync completed", "plugins", len(plugins))
+}
+
+// BuildPlugin runs the build command declared in plugin.json.
+// It compiles the plugin's stdio server into a native binary so that
+// users don't need language runtimes. Returns nil if no build is configured.
+func BuildPlugin(pluginDir string) error {
+	manifest, err := ParseManifest(filepath.Join(pluginDir, "plugin.json"))
+	if err != nil {
+		return fmt.Errorf("parse manifest: %w", err)
+	}
+	if manifest.Build == nil {
+		return nil // no build configured
+	}
+	return runBuild(pluginDir, manifest.Build)
+}
+
+// runBuild executes the build command and verifies the output exists.
+func runBuild(pluginDir string, build *BuildConfig) error {
+	if build.Command == "" {
+		return fmt.Errorf("build.command is empty")
+	}
+
+	slog.Info("plugin: building", "dir", pluginDir, "command", build.Command)
+
+	cmd := exec.Command("sh", "-c", build.Command)
+	cmd.Dir = pluginDir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	// Pass through environment + plugin root
+	cmd.Env = append(os.Environ(), "DWS_PLUGIN_ROOT="+pluginDir)
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("build failed: %w", err)
+	}
+
+	// Verify output binary exists
+	if build.Output != "" {
+		outPath := filepath.Join(pluginDir, build.Output)
+		info, err := os.Stat(outPath)
+		if err != nil {
+			return fmt.Errorf("build output not found at %s: %w", build.Output, err)
+		}
+		// Ensure the output is executable
+		if info.Mode()&0o111 == 0 {
+			_ = os.Chmod(outPath, info.Mode()|0o755)
+		}
+	}
+
+	slog.Info("plugin: build succeeded", "output", build.Output)
+	return nil
 }
 
 // copyDir recursively copies src to dst.

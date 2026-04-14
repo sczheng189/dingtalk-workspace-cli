@@ -41,6 +41,23 @@ type Manifest struct {
 	Hooks         string                `json:"hooks,omitempty"`
 	Permissions   []string              `json:"permissions,omitempty"`
 	UserConfig    map[string]ConfigItem `json:"userConfig,omitempty"`
+	Build         *BuildConfig          `json:"build,omitempty"`
+}
+
+// BuildConfig declares how to compile the plugin's stdio server into
+// a native binary. DWS runs this automatically during install so that
+// plugin users never need language runtimes or dependency managers.
+type BuildConfig struct {
+	// Command is the shell command to compile the server.
+	// Executed via "sh -c" in the plugin root directory.
+	// Examples: "bun build --compile src/server.ts --outfile bin/server"
+	//           "go build -o bin/server ./cmd/server"
+	//           "pip install pyinstaller && pyinstaller --onefile src/server.py -n server --distpath bin/"
+	Command string `json:"command"`
+
+	// Output is the path to the compiled binary, relative to the plugin root.
+	// Used to verify the build succeeded. Example: "bin/server"
+	Output string `json:"output"`
 }
 
 // MCPServer describes a single MCP server declared by a plugin.
