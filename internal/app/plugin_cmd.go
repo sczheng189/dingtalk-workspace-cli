@@ -288,7 +288,7 @@ func newPluginCreateCommand() *cobra.Command {
   "skills": "./skills/",
   "hooks": "./hooks/hooks.json"
 }
-`, name, desc, pluginType, RawVersion())
+`, name, desc, pluginType, RawVersion(), name)
 
 			if err := os.WriteFile(filepath.Join(dir, "plugin.json"), []byte(pluginJSON), 0o644); err != nil {
 				return apperrors.NewInternal(fmt.Sprintf("failed to write plugin.json: %v", err))

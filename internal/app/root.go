@@ -303,7 +303,7 @@ func NewRootCommandWithEngine(rootCtx context.Context, engine *pipeline.Engine) 
 	// endpoints (SetDynamicServers is called inside loadDynamicCommands).
 	pluginCmds := loadPlugins(engine, runner)
 	if len(pluginCmds) > 0 {
-		root.AddCommand(pluginCmds...)
+		addPluginCommandsSafe(root, pluginCmds)
 	}
 
 	if fn := edition.Get().RegisterExtraCommands; fn != nil {
@@ -672,6 +672,66 @@ func hideNonDirectRuntimeCommands(root *cobra.Command) {
 			continue
 		}
 		cmd.Hidden = true
+	}
+}
+
+// reservedCommands is the set of built-in command names that plugins must
+// not override. This protects core CLI functionality from being hijacked
+// by a malicious or misconfigured plugin.
+var reservedCommands = map[string]bool{
+	"auth": true, "login": true, "logout": true,
+	"plugin": true, "skill": true, "cache": true,
+	"config": true, "doctor": true, "completion": true,
+	"recovery": true, "upgrade": true, "version": true,
+	"schema": true, "mcp": true, "help": true,
+}
+
+// addPluginCommandsSafe registers plugin commands with conflict detection.
+//
+// Rules:
+//   - Plugin vs reserved (auth/plugin/cache/...) → reject, warn
+//   - Plugin vs plugin (same name)               → reject later one, warn
+//   - Plugin vs Market dynamic command            → allow, plugin wins
+func addPluginCommandsSafe(root *cobra.Command, pluginCmds []*cobra.Command) {
+	// Build index of existing commands before plugin registration.
+	existing := make(map[string]bool)
+	for _, cmd := range root.Commands() {
+		existing[cmd.Name()] = true
+	}
+
+	pluginSeen := make(map[string]bool)
+
+	for _, cmd := range pluginCmds {
+		name := cmd.Name()
+
+		// Rule 1: never override reserved built-in commands.
+		if reservedCommands[name] {
+			slog.Warn("plugin: command name conflicts with built-in command, skipping",
+				"command", name)
+			continue
+		}
+
+		// Rule 2: plugin vs plugin — first plugin wins.
+		if pluginSeen[name] {
+			slog.Warn("plugin: duplicate command from another plugin, skipping",
+				"command", name)
+			continue
+		}
+		pluginSeen[name] = true
+
+		// Rule 3: plugin vs Market — plugin wins, remove the old one.
+		if existing[name] {
+			for _, old := range root.Commands() {
+				if old.Name() == name {
+					root.RemoveCommand(old)
+					slog.Debug("plugin: overriding Market command",
+						"command", name)
+					break
+				}
+			}
+		}
+
+		root.AddCommand(cmd)
 	}
 }
 
