@@ -194,8 +194,9 @@ type ServerDescriptor struct {
 	Degraded                  bool          `json:"degraded"`
 	DetailLocator             DetailLocator `json:"detail_locator,omitempty"`
 	Lifecycle                 LifecycleInfo `json:"lifecycle,omitempty"`
-	CLI                       CLIOverlay    `json:"cli,omitempty"`
-	HasCLIMeta                bool          `json:"has_cli_meta,omitempty"`
+	CLI                       CLIOverlay        `json:"cli,omitempty"`
+	HasCLIMeta                bool              `json:"has_cli_meta,omitempty"`
+	AuthHeaders               map[string]string `json:"auth_headers,omitempty"` // plugin-level auth headers for third-party MCP servers
 }
 
 func NewClient(baseURL string, httpClient *http.Client) *Client {
