@@ -220,39 +220,44 @@ func isValidSemver(v string) bool {
 	return true
 }
 
-// parseSemver extracts major, minor, patch from a version string.
-func parseSemver(v string) (int, int, int) {
+// parseVersionSegments splits a version string into numeric segments.
+// It strips a leading "v" and any pre-release suffix (e.g. "-beta.1").
+// Supports any number of dot-separated segments (e.g. "0.2.43.1").
+func parseVersionSegments(v string) []int {
 	v = strings.TrimPrefix(v, "v")
 	parts := strings.SplitN(v, "-", 2) // strip pre-release
 	nums := strings.Split(parts[0], ".")
-	if len(nums) != 3 {
-		return 0, 0, 0
+	segments := make([]int, len(nums))
+	for i, n := range nums {
+		segments[i], _ = strconv.Atoi(n)
 	}
-	major, _ := strconv.Atoi(nums[0])
-	minor, _ := strconv.Atoi(nums[1])
-	patch, _ := strconv.Atoi(nums[2])
-	return major, minor, patch
+	return segments
 }
 
-// compareSemver compares two semver strings. Returns -1, 0, or 1.
+// compareSemver compares two version strings segment by segment.
+// Supports arbitrary segment counts (e.g. "0.2.33" vs "0.2.43.1").
+// Missing segments are treated as 0. Returns -1, 0, or 1.
 func compareSemver(a, b string) int {
-	aMaj, aMin, aPat := parseSemver(a)
-	bMaj, bMin, bPat := parseSemver(b)
-	if aMaj != bMaj {
-		return cmpInt(aMaj, bMaj)
+	aSegs := parseVersionSegments(a)
+	bSegs := parseVersionSegments(b)
+	maxLen := len(aSegs)
+	if len(bSegs) > maxLen {
+		maxLen = len(bSegs)
 	}
-	if aMin != bMin {
-		return cmpInt(aMin, bMin)
-	}
-	return cmpInt(aPat, bPat)
-}
-
-func cmpInt(a, b int) int {
-	if a < b {
-		return -1
-	}
-	if a > b {
-		return 1
+	for i := 0; i < maxLen; i++ {
+		av, bv := 0, 0
+		if i < len(aSegs) {
+			av = aSegs[i]
+		}
+		if i < len(bSegs) {
+			bv = bSegs[i]
+		}
+		if av < bv {
+			return -1
+		}
+		if av > bv {
+			return 1
+		}
 	}
 	return 0
 }
