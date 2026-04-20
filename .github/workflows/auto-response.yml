@@ -64,6 +64,22 @@ jobs:
               return;
             }
 
+            // Auto-reply to newly opened issues
+            if (issue && context.payload.action === "opened") {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body:
+                  "感谢您提交 issue！\n\n" +
+                  "为了帮助我们更快地定位和解决问题，请确保：\n" +
+                  "- 描述了具体的操作步骤\n" +
+                  "- 附上了相关的错误日志或截图\n" +
+                  "- 说明了使用的版本号\n\n" +
+                  "我们会尽快处理，感谢您的耐心等待。",
+              });
+            }
+
             // Handle spam label — close and lock
             const spamLabel = "r: spam";
             const invalidLabel = "invalid";
