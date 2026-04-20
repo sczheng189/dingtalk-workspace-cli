@@ -135,7 +135,9 @@ func newTodoTaskCreateCommand(runner executor.Runner) *cobra.Command {
 	preferLegacyLeaf(cmd)
 
 	cmd.Flags().String("title", "", i18n.T("待办标题 (必填)"))
+	_ = cmd.MarkFlagRequired("title")
 	cmd.Flags().String("executors", "", i18n.T("执行者 userId 列表 (必填)"))
+	_ = cmd.MarkFlagRequired("executors")
 	cmd.Flags().String("due", "", i18n.T("截止时间 ISO-8601 (如 2026-03-10T18:00:00+08:00)"))
 	cmd.Flags().String("priority", "", i18n.T("优先级: 10低/20普通/30较高/40紧急"))
 	cmd.Flags().String("recurrence", "", i18n.T("循环待办 (需先设置 --due); 格式: DTSTART:...\\nRRULE:FREQ=DAILY;INTERVAL=1"))
@@ -302,6 +304,7 @@ func newTodoTaskUpdateCommand(runner executor.Runner) *cobra.Command {
 	preferLegacyLeaf(cmd)
 
 	cmd.Flags().String("task-id", "", i18n.T("待办任务 ID (必填)"))
+	_ = cmd.MarkFlagRequired("task-id")
 	cmd.Flags().String("title", "", i18n.T("新标题"))
 	cmd.Flags().String("due", "", i18n.T("截止时间 ISO-8601 (如 2026-03-10T18:00:00+08:00)"))
 	cmd.Flags().String("priority", "", i18n.T("优先级: 10低/20普通/30较高/40紧急"))
@@ -352,7 +355,9 @@ func newTodoTaskDoneCommand(runner executor.Runner) *cobra.Command {
 	preferLegacyLeaf(cmd)
 
 	cmd.Flags().String("task-id", "", i18n.T("待办任务 ID (必填)"))
+	_ = cmd.MarkFlagRequired("task-id")
 	cmd.Flags().String("status", "", i18n.T("完成状态: true=已完成, false=未完成 (必填)"))
+	_ = cmd.MarkFlagRequired("status")
 	return cmd
 }
 
@@ -393,6 +398,7 @@ func newTodoTaskGetCommand(runner executor.Runner) *cobra.Command {
 	preferLegacyLeaf(cmd)
 
 	cmd.Flags().String("task-id", "", i18n.T("待办任务 ID (必填)"))
+	_ = cmd.MarkFlagRequired("task-id")
 	return cmd
 }
 
@@ -437,6 +443,7 @@ func newTodoTaskDeleteCommand(runner executor.Runner) *cobra.Command {
 	preferLegacyLeaf(cmd)
 
 	cmd.Flags().String("task-id", "", i18n.T("待办任务 ID (必填)"))
+	_ = cmd.MarkFlagRequired("task-id")
 	cmd.Flags().Bool("yes", false, i18n.T("跳过确认直接删除"))
 	return cmd
 }

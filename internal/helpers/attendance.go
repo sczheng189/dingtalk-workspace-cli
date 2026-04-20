@@ -132,7 +132,9 @@ func newAttendanceRecordGetCommand(runner executor.Runner) *cobra.Command {
 		},
 	}
 	cmd.Flags().String("user", "", "钉钉用户 ID (必填)")
+	_ = cmd.MarkFlagRequired("user")
 	cmd.Flags().String("date", "", "查询日期，格式 YYYY-MM-DD (必填)")
+	_ = cmd.MarkFlagRequired("date")
 	preferLegacyLeaf(cmd)
 	return cmd
 }
@@ -195,8 +197,11 @@ func newAttendanceRecordListCommand(runner executor.Runner) *cobra.Command {
 		},
 	}
 	cmd.Flags().String("users", "", "Comma-separated user ID list (required)")
+	_ = cmd.MarkFlagRequired("users")
 	cmd.Flags().String("start", "", "Start date, format YYYY-MM-DD (required)")
+	_ = cmd.MarkFlagRequired("start")
 	cmd.Flags().String("end", "", "End date, format YYYY-MM-DD (required)")
+	_ = cmd.MarkFlagRequired("end")
 	preferLegacyLeaf(cmd)
 	return cmd
 }
@@ -258,8 +263,11 @@ func newAttendanceShiftListCommand(runner executor.Runner) *cobra.Command {
 		},
 	}
 	cmd.Flags().String("users", "", "Comma-separated user ID list, max 50 (required)")
+	_ = cmd.MarkFlagRequired("users")
 	cmd.Flags().String("start", "", "Start date, format YYYY-MM-DD (required)")
+	_ = cmd.MarkFlagRequired("start")
 	cmd.Flags().String("end", "", "End date, format YYYY-MM-DD (required)")
+	_ = cmd.MarkFlagRequired("end")
 	preferLegacyLeaf(cmd)
 	return cmd
 }
@@ -310,7 +318,9 @@ func newAttendanceSummaryCommand(runner executor.Runner) *cobra.Command {
 		},
 	}
 	cmd.Flags().String("user", "", "钉钉用户 ID（必填）")
+	_ = cmd.MarkFlagRequired("user")
 	cmd.Flags().String("date", "", "工作日期，格式 yyyy-MM-dd HH:mm:ss，如 2026-03-12 15:00:00（必填）")
+	_ = cmd.MarkFlagRequired("date")
 	preferLegacyLeaf(cmd)
 	return cmd
 }
@@ -357,6 +367,7 @@ func newAttendanceRulesCommand(runner executor.Runner) *cobra.Command {
 		},
 	}
 	cmd.Flags().String("date", "", "考勤日期，格式 YYYY-MM-DD 或 yyyy-MM-dd HH:mm:ss (必填)")
+	_ = cmd.MarkFlagRequired("date")
 	preferLegacyLeaf(cmd)
 	return cmd
 }

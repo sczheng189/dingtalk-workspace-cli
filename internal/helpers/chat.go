@@ -110,9 +110,12 @@ func newChatMessageSendByBotCommand(runner executor.Runner) *cobra.Command {
 	preferLegacyLeaf(cmd)
 
 	cmd.Flags().String("group", "", "群会话 openConversationId (群聊必填)")
-	cmd.Flags().String("robot-code", "", "机器人 Code")
-	cmd.Flags().String("text", "", "消息内容 (Markdown)")
-	cmd.Flags().String("title", "", "消息标题")
+	cmd.Flags().String("robot-code", "", "机器人 Code (必填)")
+	_ = cmd.MarkFlagRequired("robot-code")
+	cmd.Flags().String("text", "", "消息内容 Markdown (必填)")
+	_ = cmd.MarkFlagRequired("text")
+	cmd.Flags().String("title", "", "消息标题 (必填)")
+	_ = cmd.MarkFlagRequired("title")
 	cmd.Flags().String("users", "", "接收者 userId 列表，逗号分隔，最多 20 个 (单聊必填)")
 	return cmd
 }
@@ -158,6 +161,7 @@ func newChatSearchCommand(runner executor.Runner) *cobra.Command {
 	preferLegacyLeaf(cmd)
 
 	cmd.Flags().String("query", "", "搜索关键词 (必填)")
+	_ = cmd.MarkFlagRequired("query")
 	cmd.Flags().String("cursor", "", "分页游标 (首页留空)")
 	return cmd
 }
@@ -183,6 +187,7 @@ func newChatGroupCommand(runner executor.Runner) *cobra.Command {
 		RunE:              newChatGroupMembersListRunE(runner),
 	}
 	members.Flags().String("id", "", "群 ID / openconversation_id (必填)")
+	_ = members.MarkFlagRequired("id")
 	members.Flags().String("cursor", "", "分页游标")
 	preferLegacyLeaf(members)
 
@@ -253,7 +258,9 @@ func newChatGroupCreateCommand(runner executor.Runner) *cobra.Command {
 	preferLegacyLeaf(cmd)
 
 	cmd.Flags().String("name", "", "群名称 (必填)")
+	_ = cmd.MarkFlagRequired("name")
 	cmd.Flags().String("users", "", "群成员 userId 列表，逗号分隔 (必填)")
+	_ = cmd.MarkFlagRequired("users")
 	return cmd
 }
 
@@ -483,8 +490,10 @@ func newChatMessageRecallByBotCommand(runner executor.Runner) *cobra.Command {
 	}
 	preferLegacyLeaf(cmd)
 	cmd.Flags().String("robot-code", "", "机器人 Code (必填)")
+	_ = cmd.MarkFlagRequired("robot-code")
 	cmd.Flags().String("group", "", "群会话 openConversationId (群聊撤回必填)")
 	cmd.Flags().String("keys", "", "逗号分隔的消息 processQueryKey 列表 (必填)")
+	_ = cmd.MarkFlagRequired("keys")
 	return cmd
 }
 
@@ -547,8 +556,11 @@ func newChatMessageSendByWebhookCommand(runner executor.Runner) *cobra.Command {
 	}
 	preferLegacyLeaf(cmd)
 	cmd.Flags().String("token", "", "Webhook token (必填)")
+	_ = cmd.MarkFlagRequired("token")
 	cmd.Flags().String("title", "", "消息标题 (必填)")
+	_ = cmd.MarkFlagRequired("title")
 	cmd.Flags().String("text", "", "消息内容 (必填)")
+	_ = cmd.MarkFlagRequired("text")
 	cmd.Flags().Bool("at-all", false, "@所有人")
 	cmd.Flags().String("at-mobiles", "", "按手机号 @，逗号分隔")
 	cmd.Flags().String("at-users", "", "按 userId @，逗号分隔")
@@ -614,7 +626,9 @@ func newChatGroupRenameCommand(runner executor.Runner) *cobra.Command {
 	}
 	preferLegacyLeaf(cmd)
 	cmd.Flags().String("id", "", "群 ID / openconversation_id (必填)")
+	_ = cmd.MarkFlagRequired("id")
 	cmd.Flags().String("name", "", "新群名称 (必填)")
+	_ = cmd.MarkFlagRequired("name")
 	return cmd
 }
 
@@ -653,7 +667,9 @@ func newChatGroupMemberAddCommand(runner executor.Runner) *cobra.Command {
 	}
 	preferLegacyLeaf(cmd)
 	cmd.Flags().String("id", "", "群 ID / openconversation_id (必填)")
+	_ = cmd.MarkFlagRequired("id")
 	cmd.Flags().String("users", "", "要添加的 userId 列表，逗号分隔 (必填)")
+	_ = cmd.MarkFlagRequired("users")
 	return cmd
 }
 
@@ -692,7 +708,9 @@ func newChatGroupMemberRemoveCommand(runner executor.Runner) *cobra.Command {
 	}
 	preferLegacyLeaf(cmd)
 	cmd.Flags().String("id", "", "Group ID / openconversation_id (required)")
+	_ = cmd.MarkFlagRequired("id")
 	cmd.Flags().String("users", "", "Comma-separated userId list to remove (required)")
+	_ = cmd.MarkFlagRequired("users")
 	return cmd
 }
 
@@ -731,7 +749,9 @@ func newChatGroupMembersAddBotCommand(runner executor.Runner) *cobra.Command {
 	}
 	preferLegacyLeaf(cmd)
 	cmd.Flags().String("robot-code", "", "Bot code (required)")
+	_ = cmd.MarkFlagRequired("robot-code")
 	cmd.Flags().String("id", "", "Group openConversationId (required)")
+	_ = cmd.MarkFlagRequired("id")
 	return cmd
 }
 
