@@ -25,6 +25,8 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
+            // ── Label-based auto-reply rules ──
+            // Add a label to an issue/PR to trigger the corresponding reply.
             const rules = [
               {
                 label: "r: duplicate",
@@ -37,6 +39,23 @@ jobs:
                 close: true,
                 message:
                   "This issue has been reviewed and will not be addressed at this time. Closing.",
+              },
+              {
+                label: "r: needs-more-info",
+                close: false,
+                message:
+                  "We need more information to investigate this issue. Please provide:\n" +
+                  "- Detailed steps to reproduce\n" +
+                  "- Error logs or screenshots\n" +
+                  "- Your environment and version info\n\n" +
+                  "We'll revisit once the details are available.",
+              },
+              {
+                label: "r: stale",
+                close: true,
+                message:
+                  "This issue has been inactive for a long time and is now being closed. " +
+                  "If the problem still exists, feel free to reopen or create a new issue.",
               },
             ];
 
@@ -55,7 +74,7 @@ jobs:
             const pullRequest = context.payload.pull_request;
             const comment = context.payload.comment;
 
-            // Skip bot comments
+            // ── Skip bot comments ──
             if (comment) {
               const authorLogin = comment.user?.login ?? "";
               if (comment.user?.type === "Bot" || authorLogin.endsWith("[bot]")) {
@@ -64,33 +83,104 @@ jobs:
               return;
             }
 
-            // Auto-reply to newly opened issues
+            // ── Auto-reply to newly opened issues ──
             if (issue && context.payload.action === "opened") {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issue.number,
-                body:
-                  "感谢您提交 issue！\n\n" +
-                  "为了帮助我们更快地定位和解决问题，请确保：\n" +
-                  "- 描述了具体的操作步骤\n" +
-                  "- 附上了相关的错误日志或截图\n" +
-                  "- 说明了使用的版本号\n\n" +
-                  "我们会尽快处理，感谢您的耐心等待。",
-              });
+              const title = (issue.title ?? "").toLowerCase();
+
+              // Detect feature requests by title keywords
+              const isFeature =
+                title.includes("feature") ||
+                title.includes("feat") ||
+                title.includes("建议") ||
+                title.includes("需求") ||
+                title.includes("希望") ||
+                title.includes("新功能");
+
+              if (isFeature) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body:
+                    "感谢您提交功能建议！🎉\n\n" +
+                    "为了帮助我们更好地评估，请确保包含以下信息：\n" +
+                    "- **使用场景**：您在什么场景下需要这个功能？\n" +
+                    "- **期望行为**：您希望它如何工作？\n" +
+                    "- **替代方案**：是否有现有的替代方式？\n\n" +
+                    "我们会认真评估每一个建议，感谢您的贡献！",
+                });
+
+                // Auto-add "feature" label
+                if (!labelSet.has("feature")) {
+                  await github.rest.issues.addLabels({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    labels: ["feature"],
+                  });
+                  labelSet.add("feature");
+                }
+              } else {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body:
+                    "感谢您提交 issue！\n\n" +
+                    "为了帮助我们更快地定位和解决问题，请确保：\n" +
+                    "- 描述了具体的操作步骤\n" +
+                    "- 附上了相关的错误日志或截图\n" +
+                    "- 说明了使用的版本号\n\n" +
+                    "我们会尽快处理，感谢您的耐心等待。",
+                });
+              }
             }
 
-            // Handle spam label — close and lock
+            // ── Content-based auto-labeling (on issue open/edit) ──
+            if (issue && (context.payload.action === "opened" || context.payload.action === "edited")) {
+              const title = (issue.title ?? "").toLowerCase();
+
+              if (title.includes("bug") && !labelSet.has("bug")) {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  labels: ["bug"],
+                });
+                labelSet.add("bug");
+              }
+            }
+
+            // ── Spam handling — close and lock ──
             const spamLabel = "r: spam";
             const invalidLabel = "invalid";
             const dirtyLabel = "dirty";
+            const excessiveLabelThreshold = 20;
 
             const noisyPrMessage =
               "Closing this PR because it looks dirty (too many unrelated or unexpected changes). " +
               "This usually happens when a branch picks up unrelated commits or a merge went sideways. " +
               "Please recreate the PR from a clean branch.";
 
+            // ── PR-specific handling ──
             if (pullRequest) {
+              // Too many labels — likely spam or abuse
+              if (labelSet.size > excessiveLabelThreshold) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pullRequest.number,
+                  body: noisyPrMessage,
+                });
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pullRequest.number,
+                  state: "closed",
+                });
+                return;
+              }
+
               if (labelSet.has(dirtyLabel)) {
                 await github.rest.issues.createComment({
                   owner: context.repo.owner,
@@ -134,6 +224,7 @@ jobs:
               }
             }
 
+            // ── Issue spam/invalid handling ──
             if (issue && labelSet.has(spamLabel)) {
               await github.rest.issues.update({
                 owner: context.repo.owner,
@@ -162,7 +253,7 @@ jobs:
               return;
             }
 
-            // Match label-based rules
+            // ── Match label-based rules ──
             const isLabelEvent = context.payload.action === "labeled";
             if (!isLabelEvent) {
               return;
