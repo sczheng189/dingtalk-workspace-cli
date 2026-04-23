@@ -289,7 +289,7 @@ Flags:
 
 ```bash
 # 正确流程：先获取 fieldId
-dws aitable table get --base-id <BASE_ID> --table-id <TABLE_ID> --format json
+dws aitable table get --base-id <BASE_ID> --table-ids <TABLE_ID> --format json
 # 从返回中提取 fieldId（如 fldABC123）
 
 # 再用 fieldId 写入记录
@@ -696,7 +696,7 @@ dws aitable base search --query "项目" --format json
 dws aitable base get --base-id <BASE_ID> --format json
 
 # 3. 获取表结构 — 提取 fieldId
-dws aitable table get --base-id <BASE_ID> --table-id <TABLE_ID> --format json
+dws aitable table get --base-id <BASE_ID> --table-ids <TABLE_ID> --format json
 
 # 4. 查询记录
 dws aitable record query --base-id <BASE_ID> --table-id <TABLE_ID> --format json
