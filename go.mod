@@ -3,12 +3,14 @@ module github.com/DingTalk-Real-AI/dingtalk-workspace-cli
 go 1.25.9
 
 require (
+	github.com/Microsoft/go-winio v0.6.2
 	github.com/RealAlexandreAI/json-repair v0.0.15
 	github.com/charmbracelet/bubbletea v1.3.6
 	github.com/charmbracelet/huh v1.0.0
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/fatih/color v1.18.0
 	github.com/google/uuid v1.6.0
+	github.com/gorilla/websocket v1.5.0
 	github.com/itchyny/gojq v0.12.18
 	github.com/muesli/termenv v0.16.0
 	github.com/open-dingtalk/dingtalk-stream-sdk-go v0.9.1
@@ -35,7 +37,6 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
 	github.com/godbus/dbus/v5 v5.2.2 // indirect
-	github.com/gorilla/websocket v1.5.0 // indirect
 	github.com/itchyny/timefmt-go v0.1.7 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
