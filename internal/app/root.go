@@ -356,6 +356,7 @@ func NewRootCommandWithEngine(rootCtx context.Context, engine *pipeline.Engine) 
 		newCatalogCommand(loader),
 		newConfigCommand(),
 		newDoctorCommand(),
+		newEventCommand(),
 		newCompletionCommand(root),
 		newRecoveryCommand(rootCtx, loader, flags),
 		newUpgradeCommand(),
