@@ -23,6 +23,10 @@ help:
 	@printf "  make release       - Build and publish a release via goreleaser\n"
 	@printf "  make publish-homebrew-formula - Push dist/homebrew/dingtalk-workspace-cli.rb to a tap repo\n"
 
+
+
+	
+
 build:
 	@./scripts/dev/build.sh
 
