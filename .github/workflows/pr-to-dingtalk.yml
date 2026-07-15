@@ -18,14 +18,17 @@ jobs:
         env:
           DINGTALK_PR_WEBHOOK: ${{ secrets.DINGTALK_PR_WEBHOOK }}
           DINGTALK_PR_SECRET: ${{ secrets.DINGTALK_PR_SECRET }}
+          DINGTALK_PR_AT_USER_ID: ${{ vars.DINGTALK_PR_AT_USER_ID }}
         with:
           script: |
             const crypto = require('crypto');
             const webhook = process.env.DINGTALK_PR_WEBHOOK;
             const secret = process.env.DINGTALK_PR_SECRET;
-            if (!webhook || !secret) {
+            const atUserId = process.env.DINGTALK_PR_AT_USER_ID;
+            const routeMarker = 'DWS_PR_REVIEW_ROUTER_V1';
+            if (!webhook || !secret || !atUserId) {
               core.setFailed(
-                'DINGTALK_PR_WEBHOOK and DINGTALK_PR_SECRET must both be configured',
+                'DINGTALK_PR_WEBHOOK, DINGTALK_PR_SECRET, and DINGTALK_PR_AT_USER_ID must all be configured',
               );
               return;
             }
@@ -57,12 +60,18 @@ jobs:
               `📦 ${context.repo.owner}/${context.repo.repo}`,
               '',
               '**关键词**: GitHub pull request',
+              '',
+              `@${atUserId} **路由标识**: ${routeMarker}`,
             ].join('\n');
             const message = {
               msgtype: 'markdown',
               markdown: {
                 title: 'GitHub Pull Request 通知',
                 text,
+              },
+              at: {
+                atUserIds: [atUserId],
+                isAtAll: false,
               },
             };
 
