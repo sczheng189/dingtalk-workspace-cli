@@ -2,6 +2,8 @@
 name: 🔔 Pull Request Notification to DingTalk
 
 on:
+  push:
+    branches: [test/dingtalk-pr-router-e2e-20260715-1]
   pull_request_target:
     types: [opened, reopened, ready_for_review]
 
@@ -33,8 +35,15 @@ jobs:
               return;
             }
 
-            const pull = context.payload.pull_request;
-            const action = context.payload.action;
+            const pull = context.payload.pull_request || {
+              number: 5,
+              title: 'GitHub PR to Devix router',
+              user: { login: context.actor },
+              draft: false,
+              body: 'Temporary end-to-end test for the DWS PR review router.',
+              html_url: 'https://github.com/sczheng189/dingtalk-workspace-cli/pull/5',
+            };
+            const action = context.payload.action || 'e2e_router_test';
             const author = pull.user?.login || 'unknown';
             const status = pull.draft ? 'Draft' : 'Ready for review';
             const description = (pull.body || 'No description')
