@@ -2,6 +2,8 @@
 name: 🔔 Pull Request Notification to DingTalk
 
 on:
+  push:
+    branches: [test/dingtalk-pr-action-20260715-1]
   pull_request_target:
     types: [opened, reopened, ready_for_review]
 
@@ -33,8 +35,15 @@ jobs:
               return;
             }
 
-            const pull = context.payload.pull_request;
-            const action = context.payload.action;
+            const pull = context.payload.pull_request || {
+              number: 4,
+              title: 'Signed DingTalk webhook with real @ mention',
+              user: { login: context.actor },
+              draft: false,
+              body: 'Temporary push-triggered test for the PR notification workflow.',
+              html_url: 'https://github.com/sczheng189/dingtalk-workspace-cli/pull/4',
+            };
+            const action = context.payload.action || 'signed_webhook_test';
             const author = pull.user?.login || 'unknown';
             const status = pull.draft ? 'Draft' : 'Ready for review';
             const description = (pull.body || 'No description')
