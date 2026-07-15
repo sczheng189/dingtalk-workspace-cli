@@ -4,9 +4,6 @@ name: 🔔 Pull Request Notification to DingTalk
 on:
   pull_request_target:
     types: [opened, reopened, ready_for_review]
-  # Temporary fork-only trigger. Removed after the signed webhook is verified.
-  push:
-    branches: [feat/github-pr-review-router]
 
 permissions:
   contents: read
@@ -17,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 📬 Send pull request to DingTalk
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           DINGTALK_PR_WEBHOOK: ${{ secrets.DINGTALK_PR_WEBHOOK }}
           DINGTALK_PR_SECRET: ${{ secrets.DINGTALK_PR_SECRET }}
@@ -34,28 +31,14 @@ jobs:
             }
 
             const pull = context.payload.pull_request;
-            const isForkSigningTest = context.eventName === 'push';
-            const action = isForkSigningTest ? 'signed-webhook-test' : context.payload.action;
-            const author = isForkSigningTest
-              ? context.actor
-              : pull.user?.login || 'unknown';
-            const status = isForkSigningTest
-              ? 'Fork signing test'
-              : pull.draft
-                ? 'Draft'
-                : 'Ready for review';
-            const description = isForkSigningTest
-              ? '验证 GitHub Actions 可以使用加签方式调用钉钉自定义机器人。'
-              : (pull.body || 'No description')
-                  .replace(/<!--([\s\S]*?)-->/g, '')
-                  .trim()
-                  .slice(0, 500);
-            const targetUrl = isForkSigningTest
-              ? `https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${context.sha}`
-              : pull.html_url;
-            const title = isForkSigningTest
-              ? `[SIGNED WEBHOOK TEST] ${context.sha.slice(0, 7)}`
-              : `[${action.toUpperCase()}] PR #${pull.number}: ${pull.title}`;
+            const action = context.payload.action;
+            const author = pull.user?.login || 'unknown';
+            const status = pull.draft ? 'Draft' : 'Ready for review';
+            const description = (pull.body || 'No description')
+              .replace(/<!--([\s\S]*?)-->/g, '')
+              .trim()
+              .slice(0, 500);
+            const title = `[${action.toUpperCase()}] PR #${pull.number}: ${pull.title}`;
             const text = [
               '## 🔔 GitHub Pull Request 通知',
               '',
@@ -68,7 +51,7 @@ jobs:
               description || 'No description',
               description.length >= 500 ? '...' : '',
               '',
-              `[点击查看](${targetUrl})`,
+              `[点击查看 PR](${pull.html_url})`,
               '',
               '---',
               `📦 ${context.repo.owner}/${context.repo.repo}`,
@@ -113,8 +96,4 @@ jobs:
                 `DingTalk webhook rejected message: ${result.errcode} ${result.errmsg || ''}`,
               );
             }
-            core.info(
-              isForkSigningTest
-                ? `DingTalk signed webhook test sent for ${context.sha}`
-                : `DingTalk PR notification sent for #${pull.number}`,
-            );
+            core.info(`DingTalk PR notification sent for #${pull.number}`);
