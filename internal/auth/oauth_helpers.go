@@ -133,7 +133,11 @@ func (p *OAuthProvider) refreshWithRefreshToken(ctx context.Context, data *Token
 	}
 
 	if clientID == "" || clientSecret == "" || strings.HasPrefix(clientSecret, "<") {
-		return nil, fmt.Errorf("无法刷新 token: 缺少 clientId 或 clientSecret，请重新登录")
+		return nil, NewCredentialError(
+			"无法刷新 token: 缺少 clientId 或 clientSecret，请重新登录",
+			ErrRefreshPermanent,
+			nil,
+		)
 	}
 
 	body := map[string]string{
@@ -148,7 +152,11 @@ func (p *OAuthProvider) refreshWithRefreshToken(ctx context.Context, data *Token
 	}
 	updated, err := p.parseTokenResponse(resp)
 	if err != nil {
-		return nil, err
+		return nil, NewCredentialError(
+			fmt.Sprintf("解析刷新响应失败: %v", err),
+			ErrRefreshPermanent,
+			err,
+		)
 	}
 	// Preserve original credentials info
 	updated.ClientID = data.ClientID
@@ -164,7 +172,11 @@ func (p *OAuthProvider) refreshWithRefreshToken(ctx context.Context, data *Token
 	// Refresh runs under lockedRefresh's dual-layer lock; use the lock-free
 	// saver to avoid re-acquiring the non-reentrant lock (deadlock).
 	if err := oauthSaveTokenLocked(p.configDir, updated); err != nil {
-		return nil, fmt.Errorf("保存刷新后的 token 失败（旧 refresh_token 已失效，请重新登录）: %w", err)
+		return nil, NewCredentialError(
+			fmt.Sprintf("保存刷新后的 token 失败（旧 refresh_token 已失效，请重新登录）: %v", err),
+			ErrRefreshPermanent,
+			err,
+		)
 	}
 	return updated, nil
 }
@@ -179,7 +191,11 @@ func (p *OAuthProvider) refreshViaMCP(ctx context.Context, data *TokenData) (*To
 	}
 
 	if clientID == "" {
-		return nil, fmt.Errorf("无法刷新 token: 缺少 clientId，请重新登录")
+		return nil, NewCredentialError(
+			"无法刷新 token: 缺少 clientId，请重新登录",
+			ErrRefreshPermanent,
+			nil,
+		)
 	}
 
 	url := GetMCPBaseURL() + MCPRefreshTokenPath
@@ -194,7 +210,11 @@ func (p *OAuthProvider) refreshViaMCP(ctx context.Context, data *TokenData) (*To
 	}
 	updated, err := p.parseMCPTokenResponse(resp)
 	if err != nil {
-		return nil, err
+		return nil, NewCredentialError(
+			fmt.Sprintf("解析刷新响应失败: %v", err),
+			ErrRefreshPermanent,
+			err,
+		)
 	}
 	// Preserve original credentials info
 	updated.ClientID = data.ClientID
@@ -210,10 +230,23 @@ func (p *OAuthProvider) refreshViaMCP(ctx context.Context, data *TokenData) (*To
 	// Refresh runs under lockedRefresh's dual-layer lock; use the lock-free
 	// saver to avoid re-acquiring the non-reentrant lock (deadlock).
 	if err := oauthSaveTokenLocked(p.configDir, updated); err != nil {
-		return nil, fmt.Errorf("保存刷新后的 token 失败（旧 refresh_token 已失效，请重新登录）: %w", err)
+		return nil, NewCredentialError(
+			fmt.Sprintf("保存刷新后的 token 失败（旧 refresh_token 已失效，请重新登录）: %v", err),
+			ErrRefreshPermanent,
+			err,
+		)
 	}
 	return updated, nil
 }
+
+// HTTPStatusError 保留 HTTP 非 200 响应的状态码供调用方做错误分类（如区分
+// “RT 被服务端拒绝”与“服务端暂时故障”），Error() 文本与历史格式完全一致。
+type HTTPStatusError struct {
+	Status int
+	Body   string
+}
+
+func (e *HTTPStatusError) Error() string { return fmt.Sprintf("HTTP %d: %s", e.Status, e.Body) }
 
 func (p *OAuthProvider) postJSON(ctx context.Context, endpoint string, body any) ([]byte, error) {
 	b, err := json.Marshal(body)
@@ -242,7 +275,7 @@ func (p *OAuthProvider) postJSON(ctx context.Context, endpoint string, body any)
 		return nil, fmt.Errorf("reading response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncateBody(data, 200))
+		return nil, &HTTPStatusError{Status: resp.StatusCode, Body: truncateBody(data, 200)}
 	}
 	return data, nil
 }

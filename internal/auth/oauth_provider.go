@@ -642,7 +642,15 @@ continueLogin:
 func (p *OAuthProvider) GetAccessToken(ctx context.Context) (string, error) {
 	data, err := oauthLoadToken(p.configDir)
 	if err != nil {
-		return "", errors.New(i18n.T("未登录，请运行 dws auth login"))
+		// 只有“确实没有凭证”才归类为 ErrNoCredentials；keychain 权限、解密失败、
+		// profiles 损坏、edition hook 读取失败等真实错误必须原样透传（保留 cause），
+		// 否则会被误报成“未登录”并错误触发 legacy token fallback。
+		// os.ErrNotExist 一并视为无凭证：secure-store 文件缺失（全新机器）以及
+		// edition hook 用 fs 语义表达“未登录”时都返回它。
+		if errors.Is(err, ErrTokenDataNotFound) || errors.Is(err, os.ErrNotExist) {
+			return "", NewCredentialError(i18n.T("未登录，请运行 dws auth login"), ErrNoCredentials, err)
+		}
+		return "", err
 	}
 
 	// Fast path: access_token still valid — no lock needed.
@@ -660,12 +668,70 @@ func (p *OAuthProvider) GetAccessToken(ctx context.Context) (string, error) {
 		if p.logger != nil {
 			p.logger.Warn(i18n.T("refresh_token 刷新失败"), "error", rErr)
 		}
-		return "", fmt.Errorf("%s: %w", i18n.T("refresh_token 刷新失败"), rErr)
+		return "", classifyRefreshFailure(rErr)
 	} else {
 		_ = oauthMarkProfile(p.configDir, TokenProfileSelector(data), ProfileStatusExpired)
 	}
 
-	return "", errors.New(i18n.T("所有凭证已失效，请运行 dws auth login 重新登录"))
+	return "", NewCredentialError(i18n.T("所有凭证已失效，请运行 dws auth login 重新登录"), ErrNoCredentials, nil)
+}
+
+// classifyRefreshFailure keeps retry semantics fail-closed. Only failures that
+// are expected to heal without changing credentials (network/timeout,
+// 408/425/429 and 5xx) are tagged ErrRefreshFailed. Everything else either
+// requires a fresh login or explicit user action and must stop daemon retries.
+func classifyRefreshFailure(err error) error {
+	if errors.Is(err, ErrNoCredentials) {
+		return NewCredentialError(
+			fmt.Sprintf("%s: %v", i18n.T("登录态已被服务端拒绝，请运行 dws auth login 重新登录"), err),
+			ErrNoCredentials,
+			err,
+		)
+	}
+	if errors.Is(err, ErrRefreshPermanent) {
+		return NewCredentialError(
+			fmt.Sprintf("%s: %v", i18n.T("refresh_token 刷新失败"), err),
+			ErrRefreshPermanent,
+			err,
+		)
+	}
+
+	var httpErr *HTTPStatusError
+	if errors.As(err, &httpErr) {
+		switch httpErr.Status {
+		case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden:
+			return NewCredentialError(
+				fmt.Sprintf("%s: %v", i18n.T("登录态已被服务端拒绝，请运行 dws auth login 重新登录"), err),
+				ErrNoCredentials,
+				err,
+			)
+		case http.StatusRequestTimeout, http.StatusTooEarly, http.StatusTooManyRequests:
+			return NewCredentialError(
+				fmt.Sprintf("%s: %v", i18n.T("refresh_token 刷新失败"), err),
+				ErrRefreshFailed,
+				err,
+			)
+		default:
+			if httpErr.Status >= http.StatusInternalServerError {
+				return NewCredentialError(
+					fmt.Sprintf("%s: %v", i18n.T("refresh_token 刷新失败"), err),
+					ErrRefreshFailed,
+					err,
+				)
+			}
+			return NewCredentialError(
+				fmt.Sprintf("%s: %v", i18n.T("refresh_token 刷新失败"), err),
+				ErrRefreshPermanent,
+				err,
+			)
+		}
+	}
+
+	return NewCredentialError(
+		fmt.Sprintf("%s: %v", i18n.T("refresh_token 刷新失败"), err),
+		ErrRefreshFailed,
+		err,
+	)
 }
 
 // lockedRefresh attempts to refresh the token while holding dual-layer locks.
@@ -714,10 +780,14 @@ func (p *OAuthProvider) lockedRefresh(ctx context.Context) (*TokenData, error) {
 
 	// Still expired — we need to actually refresh.
 	if !data.IsRefreshTokenValid() {
-		return nil, fmt.Errorf("refresh_token 已过期")
+		return nil, NewCredentialError("refresh_token 已过期", ErrNoCredentials, nil)
 	}
 	if err := preflightTokenRefreshPersistence(p.configDir, data); err != nil {
-		return nil, fmt.Errorf("%s: %w", i18n.T("本地登录态无法安全更新"), err)
+		return nil, NewCredentialError(
+			fmt.Sprintf("%s: %v", i18n.T("本地登录态无法安全更新"), err),
+			ErrRefreshPermanent,
+			err,
+		)
 	}
 
 	if p.logger != nil {

@@ -554,7 +554,7 @@ func TestCrossPlatformCoverageRecoveryRuntimeHTTP(t *testing.T) {
 	defer server.Close()
 	SetDynamicServers([]mcptypes.ServerDescriptor{{Endpoint: server.URL, CLI: mcptypes.CLIOverlay{ID: "devdoc", Tools: []mcptypes.CLITool{{Name: "search_open_platform_docs_rag"}}}}})
 	t.Cleanup(func() { SetDynamicServers(nil) })
-	runtime := &recoveryRuntime{transport: transport.NewClient(server.Client())}
+	runtime := &recoveryRuntime{transport: transport.NewClient(server.Client()), flags: &GlobalFlags{Token: "test-token"}}
 	got, err := runtime.Search(context.Background(), "query", recovery.RecoveryContext{ToolName: "search"})
 	if err != nil || got.DocSearch.Status != "success" || len(got.KBHits) == 0 {
 		t.Fatalf("recovery search = %#v %v", got, err)
@@ -920,6 +920,19 @@ func TestCrossPlatformCoverageExecuteInvocationCoverage(t *testing.T) {
 	if _, err := r.executeInvocation(context.Background(), server.URL, inv); err == nil || !isAuthError(err) {
 		t.Fatalf("unauthenticated execution = %v", err)
 	}
+
+	// 凭证解析失败（如 RT 刷新失败）必须透传真实原因，而不是折叠成“未登录”。
+	// 本测试开头 Override 了 TokenProvider，直接替换为返回刷新失败的版本即可覆盖透传链。
+	edition.Override(&edition.Hooks{TokenProvider: func(context.Context, func() (string, error)) (string, error) {
+		return "", authpkg.NewCredentialError("refresh_token 刷新失败: boom", authpkg.ErrRefreshFailed, errors.New("boom"))
+	}})
+	if _, err := r.executeInvocation(context.Background(), server.URL, inv); err == nil ||
+		!errors.Is(err, authpkg.ErrRefreshFailed) || !strings.Contains(err.Error(), "凭证不可用") {
+		t.Fatalf("refresh failure transparency = %v", err)
+	}
+	edition.Override(&edition.Hooks{TokenProvider: func(context.Context, func() (string, error)) (string, error) {
+		return "", nil
+	}})
 
 	pluginAuthMu.Lock()
 	pluginAuthRegistry = map[string]*PluginAuth{

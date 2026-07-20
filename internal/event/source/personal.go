@@ -27,6 +27,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	authpkg "github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/auth"
 	dwsevent "github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/event"
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/pkg/config"
 	"github.com/gorilla/websocket"
@@ -41,17 +42,27 @@ const (
 )
 
 type PersonalConfig struct {
-	AccessToken     string
-	ClientID        string
-	ClientSecret    string
-	SourceID        string
-	TicketURL       string
-	TicketMode      string
-	HTTPClient      *http.Client
-	WebSocketDialer *websocket.Dialer
-	Now             func() time.Time
-	ReconnectMin    time.Duration
-	ReconnectMax    time.Duration
+	// AccessToken 是静态 token（创建时定格）。保留用于测试与兼容；生产路径
+	// 应优先使用 AccessTokenProvider，让每次取票都能拿到当前有效 token。
+	AccessToken string
+	// AccessTokenProvider 在每次 fetchTicket 前被调用，返回当前有效的 access
+	// token。长驻 bus 进程内的 AT 过期后，重连取票会拿到刷新后的新 token，
+	// 而不是进程启动时定格的旧 token。优先级高于 AccessToken。
+	AccessTokenProvider func(context.Context) (string, error)
+	// ForceRefreshToken 在 fetchTicket 收到 401 时被调用一次，入参是被服务端
+	// 拒绝的那个 token；实现应在“盘上 AT 仍是它”的前提下强刷（ compare-and-
+	// mark ），返回新 token 供立即重试一次。为 nil 时 401 维持不可重试语义。
+	ForceRefreshToken func(ctx context.Context, rejectedToken string) (string, error)
+	ClientID          string
+	ClientSecret      string
+	SourceID          string
+	TicketURL         string
+	TicketMode        string
+	HTTPClient        *http.Client
+	WebSocketDialer   *websocket.Dialer
+	Now               func() time.Time
+	ReconnectMin      time.Duration
+	ReconnectMax      time.Duration
 }
 
 type PersonalSource struct {
@@ -73,8 +84,8 @@ type ticketResponse struct {
 }
 
 func NewPersonal(cfg PersonalConfig) (*PersonalSource, error) {
-	if strings.TrimSpace(cfg.AccessToken) == "" {
-		return nil, errors.New("personal source: AccessToken is required")
+	if strings.TrimSpace(cfg.AccessToken) == "" && cfg.AccessTokenProvider == nil {
+		return nil, errors.New("personal source: AccessToken or AccessTokenProvider is required")
 	}
 	if strings.TrimSpace(cfg.ClientID) == "" {
 		return nil, errors.New("personal source: ClientID is required")
@@ -191,7 +202,53 @@ func (s *PersonalSource) runAttempt(ctx context.Context, emit dwsevent.EmitFn) (
 	}
 }
 
+// currentAccessToken 返回本次取票应使用的 token：优先 AccessTokenProvider
+// （每次调用，长驻进程也能拿到刷新后的 token），否则回退到静态 AccessToken。
+func (s *PersonalSource) currentAccessToken(ctx context.Context) (string, error) {
+	if s.cfg.AccessTokenProvider != nil {
+		tok, err := s.cfg.AccessTokenProvider(ctx)
+		if err != nil {
+			return "", fmt.Errorf("personal source: resolve access token: %w", err)
+		}
+		if strings.TrimSpace(tok) == "" {
+			return "", errors.New("personal source: access token provider returned empty token")
+		}
+		return strings.TrimSpace(tok), nil
+	}
+	return s.cfg.AccessToken, nil
+}
+
+// fetchTicket 获取 WebSocket endpoint + ticket。遇到 401 且配置了
+// ForceRefreshToken 时自救一次：强刷（入参为被拒绝的 token，实现方负责
+// compare-and-mark 防并发覆盖），用新 token 立即重试一次；第二次无论结果
+// 如何都直接返回，绝不无限循环。
 func (s *PersonalSource) fetchTicket(ctx context.Context) (*ticketResponse, error) {
+	token, err := s.currentAccessToken(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ticket, status, err := s.fetchTicketOnce(ctx, token)
+	if err == nil {
+		return ticket, nil
+	}
+	if status != http.StatusUnauthorized || s.cfg.ForceRefreshToken == nil {
+		return nil, err
+	}
+	fresh, ferr := s.cfg.ForceRefreshToken(ctx, token)
+	if ferr != nil || strings.TrimSpace(fresh) == "" {
+		// 强刷失败原因必须与原始 401 一起保留：否则真正的 RT 交换失败（网络波动、
+		// RT 被吊销）会被折叠成裸 401，排查时完全看不到根因。
+		if ferr != nil {
+			return nil, errors.Join(err, fmt.Errorf("force refresh after 401: %w", ferr))
+		}
+		return nil, errors.Join(err, errors.New("force refresh after 401: refreshed token is empty"))
+	}
+	ticket, _, err = s.fetchTicketOnce(ctx, strings.TrimSpace(fresh))
+	return ticket, err
+}
+
+// fetchTicketOnce 执行单次取票请求，返回响应 HTTP 状态码（网络/解析错误时为 0）。
+func (s *PersonalSource) fetchTicketOnce(ctx context.Context, accessToken string) (*ticketResponse, int, error) {
 	body := map[string]any{
 		"sourceId": s.cfg.SourceID,
 		"mode":     s.cfg.TicketMode,
@@ -203,39 +260,39 @@ func (s *PersonalSource) fetchTicket(ctx context.Context) (*ticketResponse, erro
 	b, _ := json.Marshal(body)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.cfg.TicketURL, bytes.NewReader(b))
 	if err != nil {
-		return nil, fmt.Errorf("personal source: create ticket request: %w", err)
+		return nil, 0, fmt.Errorf("personal source: create ticket request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("x-user-access-token", s.cfg.AccessToken)
-	req.Header.Set("Authorization", "Bearer "+s.cfg.AccessToken)
+	req.Header.Set("x-user-access-token", accessToken)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("X-DWS-Client-Id", s.cfg.ClientID)
 	req.Header.Set("X-DWS-Source-Id", s.cfg.SourceID)
 
 	resp, err := s.cfg.HTTPClient.Do(req)
 	if err != nil {
-		return nil, retryPersonal(fmt.Errorf("personal source: fetch ticket: %w", err))
+		return nil, 0, retryPersonal(fmt.Errorf("personal source: fetch ticket: %w", err))
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, config.MaxResponseBodySize))
 	if err != nil {
-		return nil, retryPersonal(fmt.Errorf("personal source: read ticket response: %w", err))
+		return nil, resp.StatusCode, retryPersonal(fmt.Errorf("personal source: read ticket response: %w", err))
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		err := fmt.Errorf("personal source: ticket HTTP %d", resp.StatusCode)
 		if retryableTicketStatus(resp.StatusCode) {
-			return nil, retryPersonal(err)
+			return nil, resp.StatusCode, retryPersonal(err)
 		}
-		return nil, err
+		return nil, resp.StatusCode, err
 	}
 	ticket, err := decodeTicket(data)
 	if err != nil {
-		return nil, err
+		return nil, resp.StatusCode, err
 	}
 	if ticket.Endpoint == "" || ticket.Ticket == "" {
-		return nil, errors.New("personal source: ticket response missing endpoint or ticket")
+		return nil, resp.StatusCode, errors.New("personal source: ticket response missing endpoint or ticket")
 	}
-	return ticket, nil
+	return ticket, resp.StatusCode, nil
 }
 
 func (s *PersonalSource) handleFrame(conn *websocket.Conn, data []byte, emit dwsevent.EmitFn) error {
@@ -349,12 +406,26 @@ func retryPersonal(err error) error {
 	return &retryablePersonalError{err: err}
 }
 
+// isRetryablePersonalError 判定错误是否值得退避重连。除连接/取票类可重试错误外，
+// RT 交换失败（ErrRefreshFailed，通常是网络波动或服务端暂时故障）也按可重试处理：
+// 长驻订阅进程遇到暂时性刷新失败应退避重试、等待自愈，而不是直接退出 bus。
+// ErrNoCredentials（真的需要重新登录）保持致命，立即退出并暴露给用户。
 func isRetryablePersonalError(err error) bool {
+	if errors.Is(err, authpkg.ErrRefreshFailed) {
+		return true
+	}
 	var retryable *retryablePersonalError
 	return errors.As(err, &retryable)
 }
 
+// personalRetryLogError 生成写进 bus.log 的重连原因。RT 刷新失败必须保留真实原因
+// （网络错误 / HTTP 状态 / 持久化失败），否则“AT 到期 → 自动刷新失败”在日志里
+// 只剩一句 retryable stream error，无法排障。输出做长度截断防止刷屏；该错误链
+// 由凭证解析层构造，不含 token 本体。
 func personalRetryLogError(err error) string {
+	if errors.Is(err, authpkg.ErrRefreshFailed) {
+		return "personal source: token refresh failed: " + truncatePersonalLogMessage(err.Error())
+	}
 	message := err.Error()
 	switch {
 	case strings.Contains(message, "ticket HTTP"):
@@ -372,6 +443,15 @@ func personalRetryLogError(err error) string {
 	default:
 		return "personal source: retryable stream error"
 	}
+}
+
+// truncatePersonalLogMessage 截断写入 bus.log 的错误文本，防止异常长输出刷屏。
+func truncatePersonalLogMessage(message string) string {
+	const maxLen = 300
+	if len(message) <= maxLen {
+		return message
+	}
+	return message[:maxLen] + "...(truncated)"
 }
 
 func retryableTicketStatus(status int) bool {

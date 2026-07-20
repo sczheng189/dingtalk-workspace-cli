@@ -212,11 +212,20 @@ func TestCrossPlatformCoverageConfigAndTokenSeamsCoverage(t *testing.T) {
 	if _, err := resolveAccessTokenFromDir(context.Background(), "unused"); !errors.Is(err, authpkg.ErrTokenDecryption) {
 		t.Fatalf("decryption error = %v", err)
 	}
-	newAccessTokenProvider = func(string) accessTokenGetter { return fakeAccessTokenGetter{err: errors.New("missing")} }
+	// 只有“确实没有 OAuth 凭证”（ErrNoCredentials）才允许 legacy fallback。
+	newAccessTokenProvider = func(string) accessTokenGetter { return fakeAccessTokenGetter{err: authpkg.ErrNoCredentials} }
 	newLegacyTokenManager = func(string) legacyTokenGetter { return fakeLegacyTokenGetter{token: " legacy "} }
 	if got, err := resolveAccessTokenFromDir(context.Background(), "unused"); err != nil || got != "legacy" {
 		t.Fatalf("legacy token = %q, %v", got, err)
 	}
+	// RT 刷新失败（ErrRefreshFailed）等真实错误必须透传，不得被 legacy 旧 token 掩盖。
+	newAccessTokenProvider = func(string) accessTokenGetter {
+		return fakeAccessTokenGetter{err: authpkg.NewCredentialError("refresh boom", authpkg.ErrRefreshFailed, errors.New("boom"))}
+	}
+	if got, err := resolveAccessTokenFromDir(context.Background(), "unused"); got != "" || !errors.Is(err, authpkg.ErrRefreshFailed) {
+		t.Fatalf("refresh failure must bypass legacy fallback = token %q error %v", got, err)
+	}
+	newAccessTokenProvider = func(string) accessTokenGetter { return fakeAccessTokenGetter{err: errors.New("missing")} }
 	authpkg.SetRuntimeProfile("corp:user")
 	t.Cleanup(func() { authpkg.SetRuntimeProfile("") })
 	if got, err := resolveAccessTokenFromDir(context.Background(), "unused"); got != "" || err == nil || err.Error() != "missing" {

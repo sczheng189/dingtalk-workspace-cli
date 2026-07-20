@@ -29,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	authpkg "github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/auth"
 	dwsevent "github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/event"
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/event/bus"
 	"github.com/DingTalk-Real-AI/dingtalk-workspace-cli/internal/event/transport"
@@ -172,9 +173,14 @@ func TestPersonalSourceReconnectsWithFreshTicket(t *testing.T) {
 	var releaseSecondOnce sync.Once
 	releaseSecond := func() { releaseSecondOnce.Do(func() { close(holdSecond) }) }
 	upgrader := websocket.Upgrader{}
+	var ticketTokensMu sync.Mutex
+	var ticketTokens []string
 	mux := http.NewServeMux()
-	mux.HandleFunc("/ticket", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/ticket", func(w http.ResponseWriter, r *http.Request) {
 		attempt := int(ticketCalls.Add(1))
+		ticketTokensMu.Lock()
+		ticketTokens = append(ticketTokens, r.Header.Get("x-user-access-token"))
+		ticketTokensMu.Unlock()
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"success": true,
 			"result": map[string]any{
@@ -212,7 +218,14 @@ func TestPersonalSourceReconnectsWithFreshTicket(t *testing.T) {
 	wsEndpoint = "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
 
 	src, err := NewPersonal(PersonalConfig{
-		AccessToken:  "token",
+		// 动态 provider：每次取票前被调用，重连时返回与首次不同的 token，
+		// 验证“重连拿新 AT”而不只是“拿新 ticket”。
+		AccessTokenProvider: func(context.Context) (string, error) {
+			if ticketCalls.Load() == 0 {
+				return "token-v1", nil
+			}
+			return "token-v2", nil
+		},
 		ClientID:     "client",
 		SourceID:     "open",
 		TicketURL:    srv.URL + "/ticket",
@@ -250,6 +263,12 @@ func TestPersonalSourceReconnectsWithFreshTicket(t *testing.T) {
 	if got := ticketCalls.Load(); got != 2 {
 		t.Fatalf("ticket calls = %d, want 2", got)
 	}
+	ticketTokensMu.Lock()
+	gotTokens := append([]string(nil), ticketTokens...)
+	ticketTokensMu.Unlock()
+	if len(gotTokens) != 2 || gotTokens[0] != "token-v1" || gotTokens[1] != "token-v2" {
+		t.Fatalf("ticket request tokens = %v, want [token-v1 token-v2]", gotTokens)
+	}
 	if got := src.State().ReconnectCount; got != 1 {
 		t.Fatalf("reconnect count = %d, want 1", got)
 	}
@@ -262,6 +281,295 @@ func TestPersonalSourceReconnectsWithFreshTicket(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("source did not stop after cancel")
+	}
+}
+
+// 401 自救：第一次取票被 401 拒绝 → ForceRefreshToken 被调一次（入参为被拒绝的
+// token）→ 用新 token 重试成功。这是“服务端提前废掉 AT”场景的完整闭环。
+func TestPersonalSourceTicket401ForceRefreshRetry(t *testing.T) {
+	var wsEndpoint string
+	var ticketCalls atomic.Int32
+	var forceCalls atomic.Int32
+	var rejectedSeen atomic.Value
+	var ticketTokensMu sync.Mutex
+	var ticketTokens []string
+	upgrader := websocket.Upgrader{}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ticket", func(w http.ResponseWriter, r *http.Request) {
+		attempt := int(ticketCalls.Add(1))
+		ticketTokensMu.Lock()
+		ticketTokens = append(ticketTokens, r.Header.Get("x-user-access-token"))
+		ticketTokensMu.Unlock()
+		if attempt == 1 {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"result":  map[string]any{"endpoint": wsEndpoint, "ticket": fmt.Sprintf("ticket-%d", attempt)},
+		})
+	})
+	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteJSON(personalTestDataFrame(1)); err != nil {
+			return
+		}
+		var ack payload.DataFrameResponse
+		_ = conn.ReadJSON(&ack)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	wsEndpoint = "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
+
+	src, err := NewPersonal(PersonalConfig{
+		AccessTokenProvider: func(context.Context) (string, error) { return "old-at", nil },
+		ForceRefreshToken: func(_ context.Context, rejectedToken string) (string, error) {
+			forceCalls.Add(1)
+			rejectedSeen.Store(rejectedToken)
+			return "new-at", nil
+		},
+		ClientID:   "client",
+		SourceID:   "open",
+		TicketURL:  srv.URL + "/ticket",
+		HTTPClient: srv.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events := make(chan *dwsevent.RawEvent, 1)
+	done := make(chan error, 1)
+	go func() { done <- src.Start(ctx, func(ev *dwsevent.RawEvent) { events <- ev }) }()
+
+	select {
+	case <-events:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for event after 401 force-refresh retry")
+	}
+	if got := forceCalls.Load(); got != 1 {
+		t.Fatalf("force refresh calls = %d, want 1", got)
+	}
+	if got := rejectedSeen.Load(); got != "old-at" {
+		t.Fatalf("force refresh rejected token = %v, want old-at", got)
+	}
+	ticketTokensMu.Lock()
+	gotTokens := append([]string(nil), ticketTokens...)
+	ticketTokensMu.Unlock()
+	if len(gotTokens) != 2 || gotTokens[0] != "old-at" || gotTokens[1] != "new-at" {
+		t.Fatalf("ticket request tokens = %v, want [old-at new-at]", gotTokens)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("source did not stop after cancel")
+	}
+}
+
+// 二次 401 必须终止：强刷后重试仍被拒 → 返回错误，ForceRefreshToken 只被调一次，
+// 绝不无限循环。
+func TestPersonalSourceTicket401SecondFailureStops(t *testing.T) {
+	var ticketCalls atomic.Int32
+	var forceCalls atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ticket", func(w http.ResponseWriter, _ *http.Request) {
+		ticketCalls.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	src, err := NewPersonal(PersonalConfig{
+		AccessTokenProvider: func(context.Context) (string, error) { return "old-at", nil },
+		ForceRefreshToken: func(context.Context, string) (string, error) {
+			forceCalls.Add(1)
+			return "new-at", nil
+		},
+		ClientID:   "client",
+		SourceID:   "open",
+		TicketURL:  srv.URL + "/ticket",
+		HTTPClient: srv.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runErr := src.Start(context.Background(), func(*dwsevent.RawEvent) {})
+	if runErr == nil || !strings.Contains(runErr.Error(), "ticket HTTP 401") {
+		t.Fatalf("Start() error = %v, want ticket HTTP 401", runErr)
+	}
+	if got := forceCalls.Load(); got != 1 {
+		t.Fatalf("force refresh calls = %d, want 1", got)
+	}
+	if got := ticketCalls.Load(); got != 2 {
+		t.Fatalf("ticket calls = %d, want 2", got)
+	}
+}
+
+// 401 后强刷失败：错误必须同时包含原始 401 和强刷失败原因，不得只报裸 401。
+func TestPersonalSourceTicket401ForceRefreshErrorVisible(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ticket", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	src, err := NewPersonal(PersonalConfig{
+		AccessTokenProvider: func(context.Context) (string, error) { return "old-at", nil },
+		ForceRefreshToken: func(context.Context, string) (string, error) {
+			return "", errors.New("rt exchange: connection reset")
+		},
+		ClientID:   "client",
+		SourceID:   "open",
+		TicketURL:  srv.URL + "/ticket",
+		HTTPClient: srv.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runErr := src.Start(context.Background(), func(*dwsevent.RawEvent) {})
+	if runErr == nil {
+		t.Fatal("Start() succeeded, want joined 401 + force refresh error")
+	}
+	for _, want := range []string{"ticket HTTP 401", "force refresh after 401", "connection reset"} {
+		if !strings.Contains(runErr.Error(), want) {
+			t.Fatalf("Start() error missing %q: %v", want, runErr)
+		}
+	}
+}
+
+// 401 后强刷返回空 token：错误同样要说明是强刷结果为空，而不是只报 401。
+func TestPersonalSourceTicket401ForceRefreshEmptyTokenVisible(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ticket", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	src, err := NewPersonal(PersonalConfig{
+		AccessTokenProvider: func(context.Context) (string, error) { return "old-at", nil },
+		ForceRefreshToken:   func(context.Context, string) (string, error) { return "", nil },
+		ClientID:            "client",
+		SourceID:            "open",
+		TicketURL:           srv.URL + "/ticket",
+		HTTPClient:          srv.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runErr := src.Start(context.Background(), func(*dwsevent.RawEvent) {})
+	if runErr == nil || !strings.Contains(runErr.Error(), "refreshed token is empty") ||
+		!strings.Contains(runErr.Error(), "ticket HTTP 401") {
+		t.Fatalf("Start() error = %v, want 401 + empty refreshed token", runErr)
+	}
+}
+
+// 暂时性 RT 刷新失败（ErrRefreshFailed）应进入退避重连而不是退出 bus：
+// 第一次取 token 失败，第二次成功并建立 WebSocket 连接。
+func TestPersonalSourceRetriesTransientRefreshFailure(t *testing.T) {
+	if !isRetryablePersonalError(fmt.Errorf("wrap: %w", authpkg.ErrRefreshFailed)) {
+		t.Fatal("ErrRefreshFailed must be retryable")
+	}
+	if isRetryablePersonalError(fmt.Errorf("wrap: %w", authpkg.ErrNoCredentials)) {
+		t.Fatal("ErrNoCredentials must stay fatal")
+	}
+
+	var wsEndpoint string
+	connected := make(chan struct{})
+	var connectOnce sync.Once
+	upgrader := websocket.Upgrader{}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ticket", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"result":  map[string]any{"endpoint": wsEndpoint, "ticket": "t-1"},
+		})
+	})
+	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		connectOnce.Do(func() { close(connected) })
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	wsEndpoint = "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
+
+	var providerCalls atomic.Int32
+	src, err := NewPersonal(PersonalConfig{
+		AccessTokenProvider: func(context.Context) (string, error) {
+			if providerCalls.Add(1) == 1 {
+				return "", fmt.Errorf("rt exchange down: %w", authpkg.ErrRefreshFailed)
+			}
+			return "good-at", nil
+		},
+		ClientID:     "client",
+		SourceID:     "open",
+		TicketURL:    srv.URL + "/ticket",
+		HTTPClient:   srv.Client(),
+		ReconnectMin: 10 * time.Millisecond,
+		ReconnectMax: 20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- src.Start(ctx, func(*dwsevent.RawEvent) {}) }()
+
+	select {
+	case <-connected:
+	case err := <-done:
+		t.Fatalf("source exited instead of retrying transient refresh failure: %v", err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for reconnect after transient refresh failure")
+	}
+	if got := providerCalls.Load(); got < 2 {
+		t.Fatalf("provider calls = %d, want >= 2 (retry after transient failure)", got)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("source did not stop after cancel")
+	}
+}
+
+// bus.log 里的重连原因必须保留 RT 刷新的真实失败原因（网络错误 / HTTP 状态），
+// 不能被压缩成 “retryable stream error”；同时要做长度截断防刷屏。
+func TestPersonalRetryLogErrorPreservesRefreshFailureReason(t *testing.T) {
+	refreshErr := authpkg.NewCredentialError("refresh_token 刷新失败: HTTP 500: upstream down", authpkg.ErrRefreshFailed, errors.New("upstream down"))
+	wrapped := fmt.Errorf("personal source: resolve access token: %w", refreshErr)
+	out := personalRetryLogError(wrapped)
+	if !strings.Contains(out, "token refresh failed") || !strings.Contains(out, "HTTP 500") {
+		t.Fatalf("log message lost refresh reason: %q", out)
+	}
+
+	long := fmt.Errorf("%w: %s", authpkg.ErrRefreshFailed, strings.Repeat("x", 500))
+	if got := personalRetryLogError(long); len(got) > 360 || !strings.HasSuffix(got, "...(truncated)") {
+		t.Fatalf("log message not truncated: len=%d", len(got))
+	}
+
+	// 非刷新类错误的既有压缩映射不得改变。
+	if got := personalRetryLogError(errors.New("personal source: dial websocket: x")); got != "personal source: dial websocket: network error" {
+		t.Fatalf("non-refresh error mapping changed: %q", got)
+	}
+	if got := personalRetryLogError(errors.New("something else")); got != "personal source: retryable stream error" {
+		t.Fatalf("default mapping changed: %q", got)
 	}
 }
 

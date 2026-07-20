@@ -47,6 +47,11 @@ var (
 // resolveAccessTokenFromDir loads OAuth then legacy token from configDir, applying
 // the same host compatibility hooks as MCP. It mirrors the former body of
 // getCachedRuntimeToken (excluding process-level cache and timing).
+//
+// The legacy fallback is reached ONLY when OAuth reports ErrNoCredentials
+// (truly no usable OAuth credential). A failed refresh_token exchange
+// (ErrRefreshFailed) or any other error is returned verbatim so callers can
+// surface the real cause instead of having it masked by a stale legacy token.
 func resolveAccessTokenFromDir(ctx context.Context, configDir string) (string, error) {
 	provider := newAccessTokenProvider(configDir)
 	token, tokenErr := provider.GetAccessToken(ctx)
@@ -54,6 +59,10 @@ func resolveAccessTokenFromDir(ctx context.Context, configDir string) (string, e
 		return strings.TrimSpace(token), nil
 	}
 	if tokenErr != nil && errors.Is(tokenErr, authpkg.ErrTokenDecryption) {
+		return "", tokenErr
+	}
+	// RT 交换失败 / RT 过期以外的错误原样透传，不走 legacy 掩盖真实原因。
+	if tokenErr != nil && !errors.Is(tokenErr, authpkg.ErrNoCredentials) {
 		return "", tokenErr
 	}
 	if strings.TrimSpace(authpkg.RuntimeProfile()) != "" {
@@ -84,13 +93,24 @@ func ResolveAuxiliaryAccessToken(ctx context.Context, configDir, explicitToken s
 		return "", fmt.Errorf("config directory is empty")
 	}
 	if filepath.Clean(configDir) == filepath.Clean(defaultConfigDir()) {
-		if tok := resolveRuntimeAuthToken(ctx, ""); tok != "" {
+		tok, err := resolveRuntimeAuthToken(ctx, "")
+		if err != nil {
+			// “无凭证”必须转换成带登录引导的用户文案，同时保留 sentinel 供 errors.Is。
+			if errors.Is(err, authpkg.ErrNoCredentials) {
+				return "", noCredentialsError()
+			}
+			return "", err
+		}
+		if tok != "" {
 			return tok, nil
 		}
 		return "", noCredentialsError()
 	}
 	tok, err := resolveAccessTokenFromDir(ctx, configDir)
 	if err != nil {
+		if errors.Is(err, authpkg.ErrNoCredentials) {
+			return "", noCredentialsError()
+		}
 		return "", err
 	}
 	if tok != "" {
@@ -99,9 +119,11 @@ func ResolveAuxiliaryAccessToken(ctx context.Context, configDir, explicitToken s
 	return "", noCredentialsError()
 }
 
+// noCredentialsError 返回带登录引导的“无凭证”错误：用户可见文案与历史一致，
+// 同时包装 authpkg.ErrNoCredentials，调用方仍可用 errors.Is 判断类别。
 func noCredentialsError() error {
 	if edition.Get().IsEmbedded {
-		return fmt.Errorf("认证信息已失效，请重新认证")
+		return authpkg.NewCredentialError("认证信息已失效，请重新认证", authpkg.ErrNoCredentials, nil)
 	}
-	return fmt.Errorf("no credentials found, run: dws auth login")
+	return authpkg.NewCredentialError("no credentials found, run: dws auth login", authpkg.ErrNoCredentials, nil)
 }

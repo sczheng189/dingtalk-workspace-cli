@@ -82,6 +82,45 @@ var (
 	tokenRevokeHTTPClient       = &http.Client{Timeout: 10 * time.Second}
 )
 
+// ErrNoCredentials 表示本地没有可用凭证（未登录，或所有凭证已失效需重新登录）。
+// 调用方应用 errors.Is 判断，不得依赖错误文本。
+var ErrNoCredentials = errors.New("no credentials available")
+
+// ErrRefreshFailed 表示 refresh_token 交换失败但属于【可重试】类别：网络波动、
+// 请求超时、服务端 5xx 或限流。调用方可以退避后重试，但不得据此删除凭证。
+var ErrRefreshFailed = errors.New("refresh token exchange failed")
+
+// ErrRefreshPermanent 表示刷新失败且不会靠原样重试自行恢复，例如缺少刷新所需
+// 的客户端凭证、服务端返回不可解析的成功响应，或新 token 已换出但无法安全落盘。
+// 调用方应停止后台重试并把原始原因暴露给用户；该类别不等同于“本地无凭证”，
+// 因而不能触发 legacy token fallback。
+var ErrRefreshPermanent = errors.New("refresh token failure requires user action")
+
+// CredentialError 在保持用户可见文本完全不变的前提下，让调用方可以用
+// errors.Is 按 sentinel 判断错误类别（ErrNoCredentials / ErrRefreshFailed /
+// ErrRefreshPermanent），同时保留底层 cause 的错误链。
+type CredentialError struct {
+	msg      string
+	sentinel error
+	cause    error
+}
+
+// NewCredentialError 构造一个分类错误：msg 为用户可见文本（保持与历史一致），
+// sentinel 为上述凭证分类 sentinel，cause 为底层原因（可 nil）。
+func NewCredentialError(msg string, sentinel, cause error) *CredentialError {
+	return &CredentialError{msg: msg, sentinel: sentinel, cause: cause}
+}
+
+func (e *CredentialError) Error() string { return e.msg }
+
+// Unwrap 暴露 sentinel 与 cause，供 errors.Is/errors.As 同时匹配。
+func (e *CredentialError) Unwrap() []error {
+	if e.cause != nil {
+		return []error{e.sentinel, e.cause}
+	}
+	return []error{e.sentinel}
+}
+
 // TokenData holds the OAuth token set persisted to disk.
 type TokenData struct {
 	AccessToken    string    `json:"access_token"`
@@ -352,6 +391,12 @@ func LoadTokenDataForProfile(configDir, profile string) (*TokenData, error) {
 		}
 		jsonData, err := h.LoadToken(configDir)
 		if err != nil {
+			// edition hook 无法 import internal 包的 sentinel；公开契约是
+			// edition.ErrNoCredentials（或 os.ErrNotExist），在此映射为内部
+			// “无凭证”分类。其余错误（I/O、解密、宿主 RPC 失败）原样透传。
+			if errors.Is(err, edition.ErrNoCredentials) || errors.Is(err, os.ErrNotExist) {
+				return nil, ErrTokenDataNotFound
+			}
 			return nil, err
 		}
 		var td TokenData

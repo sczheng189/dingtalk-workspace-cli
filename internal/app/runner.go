@@ -235,7 +235,7 @@ func (r *runtimeRunner) runSingle(ctx context.Context, invocation executor.Invoc
 	// ~70ms on macOS; starting it here lets the load overlap with endpoint
 	// resolution and catalog loading below.
 	if prefetchToken {
-		go runnerGetCachedRuntimeToken(ctx)
+		go func() { _, _ = runnerGetCachedRuntimeToken(ctx) }()
 	}
 
 	if shouldUseDirectRuntime(invocation) {
@@ -532,10 +532,11 @@ func (r *runtimeRunner) executeInvocation(ctx context.Context, endpoint string, 
 	pluginAuth, hasPluginAuth := LookupPluginAuth(invocation.CanonicalProduct)
 
 	authToken := ""
+	var authTokenErr error
 	if hasPluginAuth {
 		authToken = pluginAuth.Token
 	} else {
-		authToken = r.resolveAuthToken(ctx)
+		authToken, authTokenErr = r.resolveAuthToken(ctx)
 	}
 
 	var timeoutSec int
@@ -584,7 +585,18 @@ func (r *runtimeRunner) executeInvocation(ctx context.Context, endpoint string, 
 
 	// Fail-fast: reject unauthenticated requests before making network calls.
 	// This provides a clear error message instead of cryptic HTTP 400 from MCP.
+	// 区分两类失败：真·无凭证（提示登录）与凭证解析失败（如 RT 刷新失败，
+	// 透传真实原因，便于诊断“RT 有效但刷新失败”类问题）。
 	if strings.TrimSpace(authToken) == "" {
+		if authTokenErr != nil && !errors.Is(authTokenErr, authpkg.ErrNoCredentials) {
+			return executor.Result{}, apperrors.NewAuth(
+				fmt.Sprintf("凭证不可用：%v", authTokenErr),
+				apperrors.WithReason("auth_unavailable"),
+				apperrors.WithHint("请检查网络后重试；若持续失败，运行 'dws auth login' 重新登录"),
+				apperrors.WithActions("dws auth login"),
+				apperrors.WithCause(authTokenErr),
+			)
+		}
 		return executor.Result{}, apperrors.NewAuth(
 			"未登录，请先执行 dws auth login",
 			apperrors.WithReason("not_authenticated"),
@@ -796,48 +808,66 @@ func (r *runtimeRunner) executeStdioInvocation(ctx context.Context, invocation e
 	}, nil
 }
 
-func (r *runtimeRunner) resolveAuthToken(ctx context.Context) string {
+func (r *runtimeRunner) resolveAuthToken(ctx context.Context) (string, error) {
 	explicitToken := ""
 	if r != nil && r.globalFlags != nil {
 		explicitToken = r.globalFlags.Token
 	}
 	if token := strings.TrimSpace(explicitToken); token != "" {
-		return token
+		return token, nil
 	}
 	if tp := edition.Get().TokenProvider; tp != nil {
-		token, _ := tp(ctx, func() (string, error) {
+		return tp(ctx, func() (string, error) {
 			return resolveAccessTokenFromDir(ctx, defaultConfigDir())
 		})
-		return token
 	}
-	return getCachedRuntimeToken(ctx)
+	return runnerGetCachedRuntimeToken(ctx)
 }
 
-func resolveRuntimeAuthToken(ctx context.Context, explicitToken string) string {
+func resolveRuntimeAuthToken(ctx context.Context, explicitToken string) (string, error) {
 	if token := strings.TrimSpace(explicitToken); token != "" {
-		return token
+		return token, nil
 	}
 	// Use cached token to avoid repeated Keychain access (~70ms per call)
-	return getCachedRuntimeToken(ctx)
+	return runnerGetCachedRuntimeToken(ctx)
 }
 
-// Cached token state for process lifetime
+// Cached token state with a short TTL. The previous design pinned the token
+// for the entire process lifetime, which made long-lived daemons (event bus,
+// dev connect) permanently reuse an expired access token; a 60s TTL bounds the
+// staleness window while still avoiding ~70ms Keychain reads on hot paths.
+type cachedRuntimeTokenEntry struct {
+	token    string
+	loadedAt time.Time
+}
+
 var (
 	cachedRuntimeTokenMu sync.Mutex
-	cachedRuntimeTokens  = map[string]string{}
+	cachedRuntimeTokens  = map[string]cachedRuntimeTokenEntry{}
+	// runtimeTokenCacheTTL 是缓存新鲜度窗口（var 便于测试调整）。
+	runtimeTokenCacheTTL = 60 * time.Second
+	// runtimeTokenNow 是时钟注入点（测试可替换，避免真实 Sleep）。
+	runtimeTokenNow = time.Now
 )
 
-// getCachedRuntimeToken returns a cached access token, loading it only once per process.
-// This avoids repeated Keychain access which takes ~70ms each time.
-func getCachedRuntimeToken(ctx context.Context) string {
+// getCachedRuntimeToken returns a cached access token, re-resolving it after
+// runtimeTokenCacheTTL elapses. The resolver itself performs expiry checking
+// and refresh_token exchange, so an expired AT is healed automatically.
+//
+// Resolution errors are returned to the caller instead of being collapsed into
+// an empty token: ErrNoCredentials means "not logged in", while anything else
+// (e.g. ErrRefreshFailed) carries the real reason and must stay visible.
+// Errors are never cached.
+func getCachedRuntimeToken(ctx context.Context) (string, error) {
 	cacheKey := strings.TrimSpace(authpkg.RuntimeProfile())
 	if cacheKey == "" {
 		cacheKey = "__default__"
 	}
 	cachedRuntimeTokenMu.Lock()
-	if token := cachedRuntimeTokens[cacheKey]; token != "" {
+	if entry := cachedRuntimeTokens[cacheKey]; entry.token != "" &&
+		runtimeTokenNow().Sub(entry.loadedAt) < runtimeTokenCacheTTL {
 		cachedRuntimeTokenMu.Unlock()
-		return token
+		return entry.token, nil
 	}
 	cachedRuntimeTokenMu.Unlock()
 
@@ -846,17 +876,19 @@ func getCachedRuntimeToken(ctx context.Context) string {
 
 	configDir := defaultConfigDir()
 	token, tokenErr := resolveAccessTokenFromDir(ctx, configDir)
-	if tokenErr != nil && errors.Is(tokenErr, authpkg.ErrTokenDecryption) {
-		slog.Error(tokenErr.Error())
-		return ""
+	if tokenErr != nil {
+		if errors.Is(tokenErr, authpkg.ErrTokenDecryption) {
+			slog.Error(tokenErr.Error())
+		}
+		return "", tokenErr
 	}
 	if token == "" {
-		return ""
+		return "", authpkg.ErrNoCredentials
 	}
 	cachedRuntimeTokenMu.Lock()
-	cachedRuntimeTokens[cacheKey] = token
+	cachedRuntimeTokens[cacheKey] = cachedRuntimeTokenEntry{token: token, loadedAt: runtimeTokenNow()}
 	cachedRuntimeTokenMu.Unlock()
-	return token
+	return token, nil
 }
 
 // generateExecutionID returns a random 16-char hex string used to correlate
@@ -873,7 +905,7 @@ func generateExecutionID() string {
 func ResetRuntimeTokenCache() {
 	cachedRuntimeTokenMu.Lock()
 	defer cachedRuntimeTokenMu.Unlock()
-	cachedRuntimeTokens = map[string]string{}
+	cachedRuntimeTokens = map[string]cachedRuntimeTokenEntry{}
 }
 
 func newRuntimeContentScanner() safety.Scanner {

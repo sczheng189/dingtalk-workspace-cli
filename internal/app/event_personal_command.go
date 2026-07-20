@@ -816,8 +816,19 @@ func newPersonalStreamSource(ctx context.Context, opts personalStreamSourceOptio
 		clientSecret = secret
 	}
 	_ = ctx
+	configDir := opts.ConfigDir
 	return source.NewPersonal(source.PersonalConfig{
-		AccessToken:  opts.Identity.AccessToken,
+		AccessToken: opts.Identity.AccessToken,
+		// 每次取票都重新解析当前有效 token（含 RT 自动刷新），避免长驻 bus
+		// 进程一直使用启动时定格的旧 token。绕过进程内缓存：取票频率极低，
+		// 直接走完整解析链保证拿到的永远是最新状态。
+		AccessTokenProvider: func(pctx context.Context) (string, error) {
+			return resolveAccessTokenFromDir(pctx, configDir)
+		},
+		// 取票 401（服务端提前废掉 AT）时，在“盘上 AT 仍是它”的前提下强刷一次。
+		ForceRefreshToken: func(pctx context.Context, rejectedToken string) (string, error) {
+			return ForceRefreshAccessTokenIfCurrent(pctx, configDir, rejectedToken)
+		},
 		ClientID:     clientID,
 		ClientSecret: clientSecret,
 		SourceID:     opts.Identity.SourceID,

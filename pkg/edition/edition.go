@@ -19,10 +19,22 @@ package edition
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	"github.com/spf13/cobra"
 )
+
+// ErrNoCredentials is the public sentinel an overlay's auth hooks
+// (LoadToken / TokenProvider fallback) SHOULD return when no credential
+// exists for the current identity (e.g. the user has never logged in, or the
+// host store was cleared). The core maps it — together with os.ErrNotExist —
+// to its internal "not logged in" classification so the user sees the proper
+// re-login hint instead of a generic storage failure.
+//
+// Returning any OTHER error (I/O failure, decryption error, host RPC failure)
+// keeps the original cause visible and will NOT be treated as "not logged in".
+var ErrNoCredentials = errors.New("no credentials available")
 
 // ServerInfo describes a static MCP server endpoint.
 type ServerInfo struct {
