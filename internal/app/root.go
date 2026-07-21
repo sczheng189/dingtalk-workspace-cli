@@ -360,7 +360,7 @@ func NewRootCommandWithEngine(rootCtx context.Context, engine *pipeline.Engine) 
 		newCompletionCommand(root),
 		newRecoveryCommand(rootCtx, loader, flags),
 		newUpgradeCommand(),
-		newVersionCommand(),
+		// newVersionCommand(), // NEGTEST(用例B): 临时移除以验证 interface 门禁能否检出命令消失
 		newPluginCommand(),
 		schemaCmd,
 		mcpCmd,

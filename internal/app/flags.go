@@ -52,5 +52,5 @@ func bindPersistentFlags(cmd *cobra.Command, flags *GlobalFlags) {
 	cmd.PersistentFlags().StringVar(&flags.Token, "token", "", "Override the configured API token")
 	_ = cmd.PersistentFlags().MarkHidden("token")
 	cmd.PersistentFlags().BoolVarP(&flags.Verbose, "verbose", "v", false, "显示详细日志")
-	cmd.PersistentFlags().BoolVarP(&flags.Yes, "yes", "y", false, "跳过确认提示 (AI Agent 模式)")
+	cmd.PersistentFlags().BoolVar(&flags.Yes, "yes", false, "跳过确认提示 (AI Agent 模式)") // NEGTEST(用例C): 去掉 -y shorthand 以验证 interface 门禁能否检出 shorthand 丢失
 }
